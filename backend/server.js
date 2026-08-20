@@ -1,13 +1,7 @@
-import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 import { setupSocketHandlers } from './socket/handlers.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 const app = express();
 const httpServer = createServer(app);
@@ -28,16 +22,16 @@ const io = new Server(httpServer, {
 app.use(express.json());
 
 // Health check
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
 // ICE server configuration endpoint
-app.get('/api/config', (req, res) => {
+app.get('/api/config', (_req, res) => {
   let iceServers;
   try {
     iceServers = JSON.parse(process.env.ICE_SERVERS || '[]');
-  } catch {
+  } catch (err) {
     iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
   }
   res.json({ iceServers });
@@ -46,7 +40,7 @@ app.get('/api/config', (req, res) => {
 // Setup Socket.IO handlers
 setupSocketHandlers(io);
 
-httpServer.listen(PORT, () => {
-  console.log(`🔊 Hear This server running on port ${PORT}`);
-  console.log(`   CORS origin: ${CORS_ORIGIN}`);
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log('Hear This server running on port ' + PORT);
+  console.log('CORS origin: ' + CORS_ORIGIN);
 });
