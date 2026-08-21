@@ -7,12 +7,19 @@ const app = express();
 const httpServer = createServer(app);
 
 const PORT = process.env.PORT || 3001;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
+const CORS_ORIGIN = (process.env.CORS_ORIGIN || 'http://localhost:5173').replace(/\/+$/, '');
+
+// Normalize origins: strip trailing slashes so browser CORS always matches
+function isAllowedOrigin(origin) {
+  if (!origin) return false;
+  return origin.replace(/\/+$/, '') === CORS_ORIGIN;
+}
 
 const io = new Server(httpServer, {
   cors: {
-    origin: CORS_ORIGIN,
+    origin: isAllowedOrigin,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
   pingTimeout: 20000,
   pingInterval: 10000,
