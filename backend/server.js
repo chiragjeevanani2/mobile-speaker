@@ -38,10 +38,11 @@ app.get('/api/config', (_req, res) => {
   res.json({ iceServers });
 });
 
-// Start Express first, then attach Socket.IO to the same server
 const port = parseInt(process.env.PORT, 10) || 3001;
 
-const server = app.listen(port, () => {
+// Create HTTP server and bind to all interfaces (required by Render)
+const server = createServer(app);
+server.listen(port, '0.0.0.0', () => {
   console.log('Hear This server running on port ' + port);
   console.log('CORS origin: ' + CORS_ORIGIN);
 });
@@ -58,7 +59,10 @@ const io = new Server(server, {
 
 setupSocketHandlers(io);
 
-server.on('error', (err) => {
-  console.error('Server error:', err.message);
-  process.exit(1);
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err);
 });
