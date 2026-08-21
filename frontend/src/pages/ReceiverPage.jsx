@@ -72,6 +72,28 @@ export default function ReceiverPage() {
     }
   }, [urlRoomId]);
 
+  // Prevent phone screen from sleeping/suspending audio while playing
+  useEffect(() => {
+    let wakeLock = null;
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch {}
+    };
+
+    if (state === STATES.PLAYING || state === STATES.CONNECTED) {
+      requestWakeLock();
+    }
+
+    return () => {
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+      }
+    };
+  }, [state]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {

@@ -13,11 +13,11 @@ export function getSocket() {
     socket = io(SIGNALING_SERVER, {
       autoConnect: false,
       reconnection: true,
-      reconnectionAttempts: 15,
+      reconnectionAttempts: 30,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      timeout: 30000, // Render free tier cold starts can take a moment
-      transports: ['polling', 'websocket'],
+      timeout: 60000,
+      transports: ['websocket', 'polling'],
     });
   }
   return socket;

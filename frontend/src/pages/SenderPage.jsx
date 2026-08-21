@@ -359,12 +359,22 @@ export default function SenderPage() {
 
         // Receiver disconnected or left room
         socket.on('receiver-left', ({ receiverSocketId, totalReceivers }) => {
-          console.log(`[Sender] Phone ${receiverSocketId} left room. Remaining: ${totalReceivers}`);
+          console.log(`[Sender] Signaling notice: Phone ${receiverSocketId} left signaling. Remaining: ${totalReceivers}`);
           const entry = peerConnectionsRef.current.get(receiverSocketId);
-          if (entry) {
-            cleanupPeerConnection(entry.pc);
-            peerConnectionsRef.current.delete(receiverSocketId);
-            updateConnectedPhonesList();
+          if (entry && entry.pc) {
+            const isP2pAlive =
+              entry.pc.connectionState === 'connected' ||
+              entry.pc.iceConnectionState === 'connected' ||
+              entry.pc.iceConnectionState === 'completed';
+
+            if (!isP2pAlive) {
+              console.log(`[Sender] Closing inactive peer connection for ${receiverSocketId}`);
+              cleanupPeerConnection(entry.pc);
+              peerConnectionsRef.current.delete(receiverSocketId);
+              updateConnectedPhonesList();
+            } else {
+              console.log(`[Sender] Phone ${receiverSocketId} signaling disconnected, but WebRTC direct audio is active. Keeping playback alive!`);
+            }
           }
         });
 
