@@ -1,7 +1,11 @@
 {
   "rewrites": [
     {
-      "source": "/((?!assets/|favicon.ico|.*\\..*).*)",
+      "source": "/sender",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/speaker/:path*",
       "destination": "/index.html"
     }
   ]
