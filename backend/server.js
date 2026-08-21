@@ -105,7 +105,7 @@ io.on('connection', (socket) => {
     rooms.set(roomId, {
       id: roomId,
       senderSocketId: socket.id,
-      receiverSocketId: null,
+      receivers: new Set(),
       createdAt: Date.now(),
     });
     socket.join(roomId);
@@ -120,22 +120,27 @@ io.on('connection', (socket) => {
     const room = rooms.get(cleanRoomId);
 
     if (!room) {
-      if (typeof callback === 'function') callback({ success: false, error: 'Room not found. Please verify the code or scan again.' });
+      if (typeof callback === 'function') {
+        callback({ success: false, error: 'Room not found. Please verify the code or scan again.' });
+      }
       return;
     }
 
-    // Set or replace receiver socket ID (allows reconnecting if disconnected)
-    room.receiverSocketId = socket.id;
+    // Add receiver to the room's active receivers
+    room.receivers.add(socket.id);
     socket.join(cleanRoomId);
     socket.data.roomId = cleanRoomId;
     socket.data.role = 'receiver';
 
-    console.log(`Receiver ${socket.id} joined room ${cleanRoomId} (Sender: ${room.senderSocketId})`);
+    console.log(`Receiver ${socket.id} joined room ${cleanRoomId}. Total phones: ${room.receivers.size}`);
 
-    // Notify sender that receiver has joined
-    io.to(room.senderSocketId).emit('receiver-joined', { receiverSocketId: socket.id });
+    // Notify sender that a new receiver has joined
+    io.to(room.senderSocketId).emit('receiver-joined', {
+      receiverSocketId: socket.id,
+      totalReceivers: room.receivers.size,
+    });
 
-    // Return success WITH senderSocketId for direct signaling
+    // Return success WITH senderSocketId for direct WebRTC signaling
     if (typeof callback === 'function') {
       callback({
         success: true,
@@ -165,16 +170,22 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room) return;
 
-    const peerId = socket.data.role === 'sender' ? room.receiverSocketId : room.senderSocketId;
-    if (peerId) io.to(peerId).emit('peer-disconnected', { role: socket.data.role });
-
     if (socket.data.role === 'sender') {
+      // Notify all connected receivers
+      for (const receiverId of room.receivers) {
+        io.to(receiverId).emit('peer-disconnected', { role: 'sender' });
+      }
       rooms.delete(roomId);
       console.log(`Sender closed room ${roomId}`);
     } else {
-      room.receiverSocketId = null;
-      if (room.senderSocketId) io.to(room.senderSocketId).emit('receiver-left');
-      console.log(`Receiver left room ${roomId}, room kept open for reconnect`);
+      room.receivers.delete(socket.id);
+      if (room.senderSocketId) {
+        io.to(room.senderSocketId).emit('receiver-left', {
+          receiverSocketId: socket.id,
+          totalReceivers: room.receivers.size,
+        });
+      }
+      console.log(`Receiver ${socket.id} left room ${roomId}. Remaining: ${room.receivers.size}`);
     }
   });
 
@@ -185,13 +196,20 @@ io.on('connection', (socket) => {
     if (!room) return;
 
     if (socket.data.role === 'sender') {
-      if (room.receiverSocketId) io.to(room.receiverSocketId).emit('peer-disconnected', { role: 'sender' });
+      for (const receiverId of room.receivers) {
+        io.to(receiverId).emit('peer-disconnected', { role: 'sender' });
+      }
       rooms.delete(roomId);
       console.log(`Sender disconnected, deleted room ${roomId}`);
     } else {
-      room.receiverSocketId = null;
-      if (room.senderSocketId) io.to(room.senderSocketId).emit('receiver-left');
-      console.log(`Receiver disconnected from room ${roomId}`);
+      room.receivers.delete(socket.id);
+      if (room.senderSocketId) {
+        io.to(room.senderSocketId).emit('receiver-left', {
+          receiverSocketId: socket.id,
+          totalReceivers: room.receivers.size,
+        });
+      }
+      console.log(`Receiver ${socket.id} disconnected from room ${roomId}. Remaining: ${room.receivers.size}`);
     }
   });
 });
