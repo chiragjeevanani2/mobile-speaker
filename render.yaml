@@ -1,11 +1,10 @@
 services:
-  # Backend - API + Socket.IO signaling server
   - type: web
     name: hear-this-api
     runtime: node
     rootDir: backend
-    buildCommand: cd backend && npm install
-    startCommand: cd backend && node server.js
+    buildCommand: npm install
+    startCommand: node server.js
     envVars:
       - key: CORS_ORIGIN
         sync: false
@@ -13,4 +12,4 @@ services:
       - key: ICE_SERVERS
         value: '[{"urls":"stun:stun.l.google.com:19302"},{"urls":"stun:stun1.l.google.com:19302"}]'
       - key: ROOM_EXPIRATION_MS
-        value: 900000
+        value: '900000'

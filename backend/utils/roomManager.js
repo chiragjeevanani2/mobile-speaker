@@ -1,9 +1,7 @@
-export class RoomManager {
+class RoomManager {
   constructor(expirationMs = 900000) {
     this.rooms = new Map();
     this.expirationMs = expirationMs;
-
-    // Periodic cleanup every minute
     this.cleanupInterval = setInterval(() => {
       this.cleanupExpired();
     }, 60000);
@@ -25,13 +23,10 @@ export class RoomManager {
   getRoom(roomId) {
     const room = this.rooms.get(roomId);
     if (!room) return null;
-
-    // Check expiration
     if (Date.now() - room.lastActivity > this.expirationMs) {
       room.expired = true;
       return room;
     }
-
     room.lastActivity = Date.now();
     return room;
   }
@@ -71,3 +66,5 @@ export class RoomManager {
     this.rooms.clear();
   }
 }
+
+module.exports = { RoomManager };

@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Signaling server for Hear This - WebRTC audio streaming",
   "main": "server.js",
-  "type": "module",
   "engines": {
     "node": "20.x"
   },

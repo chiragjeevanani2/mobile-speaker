@@ -1,15 +1,14 @@
-import { RoomManager } from '../utils/roomManager.js';
-import { generateRoomId } from '../utils/helpers.js';
+const { RoomManager } = require('../utils/roomManager.js');
+const { generateRoomId } = require('../utils/helpers.js');
 
 const roomManager = new RoomManager(
-  parseInt(process.env.ROOM_EXPIRATION_MS) || 900000 // 15 minutes
+  parseInt(process.env.ROOM_EXPIRATION_MS) || 900000
 );
 
-export function setupSocketHandlers(io) {
+function setupSocketHandlers(io) {
   io.on('connection', (socket) => {
     console.log(`[Socket] Client connected: ${socket.id}`);
 
-    // Create a new room (sender/PC)
     socket.on('create-room', (callback) => {
       const roomId = generateRoomId();
       roomManager.createRoom(roomId, socket.id);
@@ -25,7 +24,6 @@ export function setupSocketHandlers(io) {
       }
     });
 
-    // Join an existing room (receiver/phone)
     socket.on('join-room', ({ roomId }, callback) => {
       const room = roomManager.getRoom(roomId);
 
@@ -59,7 +57,6 @@ export function setupSocketHandlers(io) {
 
       console.log(`[Room] Receiver ${socket.id} joined room ${roomId}`);
 
-      // Notify the sender that a receiver has joined
       io.to(room.senderSocketId).emit('receiver-joined', {
         receiverSocketId: socket.id,
       });
@@ -69,7 +66,6 @@ export function setupSocketHandlers(io) {
       }
     });
 
-    // WebRTC signaling: SDP Offer
     socket.on('offer', ({ to, offer }) => {
       console.log(`[Signaling] Offer from ${socket.id} to ${to}`);
       io.to(to).emit('offer', {
@@ -78,7 +74,6 @@ export function setupSocketHandlers(io) {
       });
     });
 
-    // WebRTC signaling: SDP Answer
     socket.on('answer', ({ to, answer }) => {
       console.log(`[Signaling] Answer from ${socket.id} to ${to}`);
       io.to(to).emit('answer', {
@@ -87,7 +82,6 @@ export function setupSocketHandlers(io) {
       });
     });
 
-    // WebRTC signaling: ICE Candidate
     socket.on('ice-candidate', ({ to, candidate }) => {
       io.to(to).emit('ice-candidate', {
         from: socket.id,
@@ -95,7 +89,6 @@ export function setupSocketHandlers(io) {
       });
     });
 
-    // Peer disconnected
     socket.on('peer-disconnect', () => {
       const roomId = socket.data.roomId;
       if (!roomId) return;
@@ -112,23 +105,18 @@ export function setupSocketHandlers(io) {
         });
       }
 
-      // If the sender disconnects, destroy the room
       if (socket.data.role === 'sender') {
         roomManager.deleteRoom(roomId);
         console.log(`[Room] Sender disconnected, room ${roomId} destroyed`);
       } else {
-        // If receiver disconnects, just clear the receiver slot
         roomManager.clearReceiver(roomId);
         console.log(`[Room] Receiver left room ${roomId}`);
-
-        // Notify sender
         if (room.senderSocketId) {
           io.to(room.senderSocketId).emit('receiver-left');
         }
       }
     });
 
-    // Disconnect event
     socket.on('disconnect', () => {
       const roomId = socket.data.roomId;
       if (!roomId) {
@@ -143,7 +131,6 @@ export function setupSocketHandlers(io) {
       }
 
       if (socket.data.role === 'sender') {
-        // Notify any receiver and clean up
         if (room.receiverSocketId) {
           io.to(room.receiverSocketId).emit('peer-disconnected', {
             role: 'sender',
@@ -152,7 +139,6 @@ export function setupSocketHandlers(io) {
         roomManager.deleteRoom(roomId);
         console.log(`[Room] Sender left, room ${roomId} destroyed`);
       } else {
-        // Notify sender
         roomManager.clearReceiver(roomId);
         if (room.senderSocketId) {
           io.to(room.senderSocketId).emit('receiver-left');
@@ -164,3 +150,5 @@ export function setupSocketHandlers(io) {
     });
   });
 }
+
+module.exports = { setupSocketHandlers };
