@@ -1,11 +1,7 @@
 {
   "rewrites": [
     {
-      "source": "/sender",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/speaker/:path*",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]

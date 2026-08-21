@@ -11,6 +11,9 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/sender" element={<SenderPage />} />
         <Route path="/speaker/:roomId" element={<ReceiverPage />} />
+        <Route path="/speaker" element={<ReceiverPage />} />
+        <Route path="/join/:roomId" element={<ReceiverPage />} />
+        <Route path="/join" element={<ReceiverPage />} />
         <Route path="*" element={<HomePage />} />
       </Routes>
     </ThemeProvider>

@@ -12,16 +12,17 @@ import {
   AlertTriangle,
   ArrowLeft,
   Speaker,
+  QrCode,
+  Keyboard,
 } from 'lucide-react';
 import ThemeToggle from '../components/ThemeToggle.jsx';
+import QrScannerModal from '../components/QrScannerModal.jsx';
 import { connectSocket, disconnectSocket } from '../services/socket.js';
 import {
   createPeerConnection,
-  setupAudioPlayback,
   createAudioVisualizer,
   getConnectionStats,
   cleanupPeerConnection,
-  cleanupStream,
 } from '../services/webrtc.js';
 
 const STATES = {
@@ -35,8 +36,14 @@ const STATES = {
 };
 
 export default function ReceiverPage() {
-  const { roomId } = useParams();
+  const { roomId: urlRoomId } = useParams();
   const navigate = useNavigate();
+
+  const [activeRoomId, setActiveRoomId] = useState(urlRoomId ? urlRoomId.toUpperCase() : '');
+  const [manualCode, setManualCode] = useState(urlRoomId ? urlRoomId.toUpperCase() : '');
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [codeError, setCodeError] = useState('');
+
   const [state, setState] = useState(STATES.IDLE);
   const [errorMsg, setErrorMsg] = useState('');
   const [volume, setVolume] = useState(0.8);
@@ -48,9 +55,16 @@ export default function ReceiverPage() {
   const socketRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const audioRef = useRef(null);
-  const audioElementRef = useRef(null);
   const visualizerRef = useRef(null);
   const statsIntervalRef = useRef(null);
+
+  // Sync if URL param changes
+  useEffect(() => {
+    if (urlRoomId) {
+      setActiveRoomId(urlRoomId.toUpperCase());
+      setManualCode(urlRoomId.toUpperCase());
+    }
+  }, [urlRoomId]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -106,13 +120,14 @@ export default function ReceiverPage() {
     }
   }, []);
 
-  const joinRoom = useCallback(async () => {
-    if (!roomId) {
-      setState(STATES.FAILED);
-      setErrorMsg('No room code found. Please scan the QR code again.');
+  const joinRoomWithId = useCallback(async (targetRoomId) => {
+    const target = (targetRoomId || activeRoomId || '').trim().toUpperCase();
+    if (!target || target.length < 4) {
+      setCodeError('Please enter a valid room code.');
       return;
     }
 
+    setActiveRoomId(target);
     setState(STATES.CONNECTING);
     setErrorMsg('');
 
@@ -123,7 +138,7 @@ export default function ReceiverPage() {
 
       // Join room
       const joinResult = await new Promise((resolve, reject) => {
-        socket.emit('join-room', { roomId }, (response) => {
+        socket.emit('join-room', { roomId: target }, (response) => {
           if (response.success) {
             resolve(response);
           } else {
@@ -140,7 +155,6 @@ export default function ReceiverPage() {
         console.log('[WebRTC] Receiver connection state:', pc.connectionState);
         if (pc.connectionState === 'connected') {
           setState(STATES.PLAYING);
-          // Start stats
           statsIntervalRef.current = setInterval(async () => {
             if (pc) {
               const stats = await getConnectionStats(pc);
@@ -166,13 +180,11 @@ export default function ReceiverPage() {
         audioRef.current.srcObject = remoteStream;
         audioRef.current.volume = muted ? 0 : volume;
 
-        // Try to play (handle autoplay)
         audioRef.current.play()
           .then(() => {
             setAutoplayBlocked(false);
             setState(STATES.PLAYING);
 
-            // Create visualizer
             try {
               const vis = createAudioVisualizer(remoteStream);
               visualizerRef.current = vis;
@@ -180,7 +192,7 @@ export default function ReceiverPage() {
                 setAudioLevel(level);
               });
             } catch {
-              // Visualizer is optional
+              // Visualizer optional
             }
           })
           .catch(() => {
@@ -198,7 +210,6 @@ export default function ReceiverPage() {
         }
       };
 
-      // Listen for offer from sender
       socket.on('offer', async ({ from, offer }) => {
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await pc.createAnswer();
@@ -210,7 +221,6 @@ export default function ReceiverPage() {
         });
       });
 
-      // Handle ICE candidates from sender
       socket.on('ice-candidate', async ({ candidate }) => {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
@@ -219,7 +229,6 @@ export default function ReceiverPage() {
         }
       });
 
-      // Handle sender disconnect
       socket.on('peer-disconnected', ({ role }) => {
         if (role === 'sender') {
           handleDisconnect();
@@ -230,7 +239,15 @@ export default function ReceiverPage() {
       setState(STATES.FAILED);
       setErrorMsg(err.message || 'Failed to connect');
     }
-  }, [roomId, volume, muted, handleDisconnect]);
+  }, [activeRoomId, volume, muted, handleDisconnect]);
+
+  const handleScanSuccess = (scannedRoomId) => {
+    setIsScannerOpen(false);
+    setActiveRoomId(scannedRoomId);
+    setManualCode(scannedRoomId);
+    navigate(`/speaker/${scannedRoomId}`, { replace: true });
+    joinRoomWithId(scannedRoomId);
+  };
 
   // Update volume when changed
   useEffect(() => {
@@ -254,18 +271,62 @@ export default function ReceiverPage() {
               <div className="receiver-logo">
                 <Speaker size={36} />
               </div>
-              <h1>Connect to "Hear This"</h1>
-              <p className="receiver-subtitle">
-                Join room <span className="room-badge">{roomId}</span>
-              </p>
-              <p className="receiver-desc">
-                Your phone will become a speaker for the connected computer.
-                Make sure your volume is up!
-              </p>
-              <button className="connect-btn" onClick={joinRoom}>
-                <Volume2 size={20} />
-                <span>Connect as Speaker</span>
-              </button>
+              <h1>Listen on Phone</h1>
+
+              {activeRoomId ? (
+                <>
+                  <p className="receiver-subtitle">
+                    Room Code: <span className="room-badge">{activeRoomId}</span>
+                  </p>
+                  <p className="receiver-desc">
+                    Your phone will become the wireless speaker for this computer. Make sure your device volume is turned up!
+                  </p>
+                  <button className="connect-btn" onClick={() => joinRoomWithId(activeRoomId)}>
+                    <Volume2 size={20} />
+                    <span>Connect & Start Listening</span>
+                  </button>
+                  <button className="secondary-btn" onClick={() => { setActiveRoomId(''); setManualCode(''); }}>
+                    <span>Change Room Code</span>
+                  </button>
+                </>
+              ) : (
+                <div className="receiver-manual-box">
+                  <p className="receiver-desc">
+                    Scan the QR code on your PC screen or enter the 6-character code below:
+                  </p>
+
+                  <button className="scan-qr-btn" onClick={() => setIsScannerOpen(true)}>
+                    <QrCode size={20} />
+                    <span>Scan QR Code</span>
+                  </button>
+
+                  <div className="code-input-group">
+                    <Keyboard size={18} className="code-icon" />
+                    <input
+                      type="text"
+                      placeholder="ENTER ROOM CODE"
+                      value={manualCode}
+                      onChange={(e) => {
+                        setManualCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8));
+                        setCodeError('');
+                      }}
+                      maxLength={8}
+                      className="manual-code-input"
+                    />
+                    <button
+                      className="manual-join-btn"
+                      disabled={!manualCode || manualCode.length < 4}
+                      onClick={() => {
+                        navigate(`/speaker/${manualCode}`, { replace: true });
+                        joinRoomWithId(manualCode);
+                      }}
+                    >
+                      Join
+                    </button>
+                  </div>
+                  {codeError && <p className="code-error-msg">{codeError}</p>}
+                </div>
+              )}
             </div>
           </div>
         );
@@ -276,7 +337,7 @@ export default function ReceiverPage() {
             <div className="receiver-card">
               <Loader2 className="spinner" size={48} />
               <h2>Connecting...</h2>
-              <p>Establishing connection to the computer</p>
+              <p>Joining room <span className="room-badge">{activeRoomId}</span></p>
             </div>
           </div>
         );
@@ -298,7 +359,7 @@ export default function ReceiverPage() {
                   <CheckCircle2 size={48} />
                 </div>
                 <h2>🔊 Connected</h2>
-                <p>Your phone is now the speaker for this computer.</p>
+                <p>Playing audio from computer in room <span className="room-badge">{activeRoomId}</span></p>
               </div>
 
               {/* Audio level visualizer */}
@@ -368,10 +429,10 @@ export default function ReceiverPage() {
             <div className="receiver-card">
               <WifiOff size={48} className="disconnected-icon" />
               <h2>Disconnected</h2>
-              <p>The connection has been lost.</p>
-              <button className="home-cta" onClick={handleBack}>
+              <p>The audio stream has ended.</p>
+              <button className="home-cta-btn" onClick={handleBack}>
                 <ArrowLeft size={18} />
-                Done
+                Return Home
               </button>
             </div>
           </div>
@@ -383,11 +444,16 @@ export default function ReceiverPage() {
             <div className="receiver-card error-card">
               <XCircle size={48} className="error-icon" />
               <h2>Connection Failed</h2>
-              <p className="error-msg">{errorMsg || 'Could not connect to the computer.'}</p>
-              <button className="home-cta" onClick={handleBack}>
-                <ArrowLeft size={18} />
-                Go Back
-              </button>
+              <p className="error-msg">{errorMsg || 'Could not connect to the room.'}</p>
+              <div className="action-buttons-row">
+                <button className="retry-btn" onClick={() => joinRoomWithId(activeRoomId)}>
+                  Retry
+                </button>
+                <button className="home-cta-btn" onClick={handleBack}>
+                  <ArrowLeft size={18} />
+                  Home
+                </button>
+              </div>
             </div>
           </div>
         );
@@ -398,8 +464,8 @@ export default function ReceiverPage() {
             <div className="receiver-card error-card">
               <XCircle size={48} className="error-icon" />
               <h2>Browser Not Supported</h2>
-              <p>Please use a modern mobile browser like Chrome, Safari, or Firefox.</p>
-              <button className="home-cta" onClick={handleBack}>
+              <p>Please use a modern mobile browser like Chrome, Safari, or Edge.</p>
+              <button className="home-cta-btn" onClick={handleBack}>
                 <ArrowLeft size={18} />
                 Go Back
               </button>
@@ -417,6 +483,12 @@ export default function ReceiverPage() {
       <ThemeToggle />
       {renderContent()}
 
+      <QrScannerModal
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        onScanSuccess={handleScanSuccess}
+      />
+
       <style>{`
         .receiver-page {
           min-height: 100vh;
@@ -431,37 +503,41 @@ export default function ReceiverPage() {
         .receiver-card {
           background: var(--bg-card);
           border: 1px solid var(--border-color);
-          border-radius: var(--radius-lg);
+          border-radius: var(--radius-xl);
           padding: 32px 24px;
           text-align: center;
-          box-shadow: var(--shadow-lg);
-          max-width: 420px;
+          box-shadow: var(--shadow-xl);
+          max-width: 440px;
           width: 100%;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
         }
 
-        /* Idle state */
         .receiver-logo {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          width: 72px;
-          height: 72px;
+          width: 68px;
+          height: 68px;
           border-radius: var(--radius-lg);
           background: linear-gradient(135deg, #6366f1, #8b5cf6);
           color: white;
-          margin-bottom: 20px;
+          margin-bottom: 16px;
+          box-shadow: 0 6px 20px rgba(99, 102, 241, 0.3);
         }
 
         .receiver-idle h1 {
-          font-size: 1.5rem;
-          font-weight: 700;
-          margin-bottom: 8px;
+          font-size: 1.6rem;
+          font-weight: 800;
+          margin-bottom: 6px;
+          color: var(--text-primary);
         }
 
         .receiver-subtitle {
           font-size: 1rem;
           color: var(--text-secondary);
-          margin-bottom: 16px;
+          margin-bottom: 12px;
         }
 
         .room-badge {
@@ -470,15 +546,15 @@ export default function ReceiverPage() {
           background: var(--accent-light);
           color: var(--accent);
           border-radius: var(--radius-sm);
-          font-weight: 700;
-          font-family: 'SF Mono', 'Fira Code', monospace;
+          font-weight: 800;
+          font-family: monospace;
           letter-spacing: 0.1em;
         }
 
         .receiver-desc {
-          font-size: 0.85rem;
+          font-size: 0.88rem;
           color: var(--text-muted);
-          margin-bottom: 24px;
+          margin-bottom: 20px;
           line-height: 1.5;
         }
 
@@ -488,233 +564,200 @@ export default function ReceiverPage() {
           justify-content: center;
           gap: 10px;
           width: 100%;
-          padding: 16px;
+          padding: 15px;
           font-size: 1.05rem;
-          font-weight: 600;
+          font-weight: 700;
           color: white;
           background: linear-gradient(135deg, #6366f1, #8b5cf6);
           border: none;
           border-radius: var(--radius-md);
           cursor: pointer;
           transition: all 0.2s ease;
-          box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
+          box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);
+          margin-bottom: 12px;
         }
 
         .connect-btn:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 8px 24px rgba(99, 102, 241, 0.4);
+          transform: translateY(-2px);
+          box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
         }
 
-        .connect-btn:active {
-          transform: translateY(0);
+        .secondary-btn {
+          background: none;
+          border: none;
+          color: var(--text-secondary);
+          font-size: 0.88rem;
+          font-weight: 500;
+          cursor: pointer;
+          padding: 6px;
         }
 
-        /* Status states */
-        .receiver-status {
-          max-width: 420px;
+        .secondary-btn:hover {
+          color: var(--accent);
+        }
+
+        .receiver-manual-box {
+          width: 100%;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .scan-qr-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          width: 100%;
+          padding: 13px;
+          background: var(--bg-card-hover);
+          color: var(--text-primary);
+          border: 1px solid var(--border-color);
+          border-radius: var(--radius-md);
+          font-size: 0.95rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .scan-qr-btn:hover {
+          border-color: var(--accent);
+          background: var(--border-color);
+        }
+
+        .code-input-group {
+          display: flex;
+          align-items: center;
+          background: var(--bg-primary);
+          border: 1px solid var(--border-color);
+          border-radius: var(--radius-md);
+          padding: 4px 6px 4px 12px;
           width: 100%;
         }
 
-        .receiver-status .receiver-card {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 12px;
-          padding: 48px 24px;
+        .code-input-group:focus-within {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
         }
 
-        .receiver-status h2 {
-          font-size: 1.3rem;
-          font-weight: 700;
-        }
-
-        .spinner {
-          color: var(--accent);
-          animation: spin 1s linear infinite;
-        }
-
-        .disconnected-icon {
+        .code-icon {
           color: var(--text-muted);
+          margin-right: 8px;
         }
 
-        .error-icon {
-          color: var(--error);
-        }
-
-        .error-msg {
-          padding: 12px 16px;
-          background: var(--error-bg);
-          border-radius: var(--radius-sm);
-          font-size: 0.9rem;
+        .manual-code-input {
+          flex: 1;
+          background: transparent;
+          border: none;
+          outline: none;
           color: var(--text-primary);
-          margin-top: 4px;
+          font-size: 1rem;
+          font-weight: 700;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          padding: 8px 0;
+        }
+
+        .manual-join-btn {
+          background: var(--accent);
+          color: white;
+          border: none;
+          padding: 8px 16px;
+          border-radius: var(--radius-sm);
+          font-weight: 600;
+          font-size: 0.9rem;
+          cursor: pointer;
+        }
+
+        .manual-join-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .code-error-msg {
+          color: var(--error);
+          font-size: 0.8rem;
+          text-align: left;
         }
 
         /* Playing state */
-        .receiver-playing {
-          max-width: 420px;
-          width: 100%;
-        }
-
-        .autoplay-banner {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 12px 16px;
-          background: var(--warning-bg);
-          border-radius: var(--radius-sm);
-          margin-bottom: 16px;
-          font-size: 0.85rem;
-          color: var(--text-primary);
-        }
-
         .playing-status {
-          margin-bottom: 16px;
+          margin-bottom: 20px;
         }
 
         .status-icon-pulse {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 72px;
+          height: 72px;
+          border-radius: 50%;
+          background: rgba(34, 197, 94, 0.15);
           color: var(--success);
-          margin-bottom: 8px;
-          animation: scaleIn 0.5s ease-out;
+          margin-bottom: 12px;
         }
 
-        .playing-status h2 {
-          font-size: 1.4rem;
-          font-weight: 700;
-          margin-bottom: 4px;
-        }
-
-        .playing-status p {
-          color: var(--text-secondary);
-          font-size: 0.9rem;
-        }
-
-        /* Phone visualizer */
         .phone-visualizer {
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 4px;
-          height: 40px;
-          margin: 16px 0;
+          gap: 6px;
+          height: 48px;
+          width: 100%;
+          margin-bottom: 20px;
         }
 
         .phone-bar {
-          width: 5px;
-          border-radius: 2px;
+          width: 6px;
+          border-radius: 3px;
           background: var(--border-color);
-          transition: height 0.08s ease, background-color 0.15s ease;
-          min-height: 4px;
+          transition: height 0.1s ease, background 0.1s ease;
         }
 
         .phone-bar.active {
-          background: linear-gradient(180deg, #6366f1, #8b5cf6);
+          background: var(--accent);
         }
 
-        /* Volume control */
         .volume-control {
           display: flex;
           align-items: center;
           gap: 12px;
-          padding: 12px 16px;
-          background: var(--bg-primary);
-          border-radius: var(--radius-md);
           width: 100%;
-          margin: 12px 0;
+          background: var(--bg-primary);
+          padding: 12px 16px;
+          border-radius: var(--radius-md);
+          margin-bottom: 16px;
         }
 
         .mute-btn {
+          background: none;
+          border: none;
+          color: var(--text-primary);
+          cursor: pointer;
           display: flex;
           align-items: center;
-          justify-content: center;
-          width: 36px;
-          height: 36px;
-          border: none;
-          border-radius: 50%;
-          background: var(--bg-card);
-          color: var(--text-secondary);
-          cursor: pointer;
-          transition: all 0.2s ease;
-          flex-shrink: 0;
-        }
-
-        .mute-btn:hover {
-          color: var(--accent);
-          background: var(--accent-light);
         }
 
         .volume-slider {
           flex: 1;
-          height: 6px;
-          -webkit-appearance: none;
-          appearance: none;
-          background: var(--border-color);
-          border-radius: 3px;
-          outline: none;
-          cursor: pointer;
-        }
-
-        .volume-slider::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          background: var(--accent);
-          cursor: pointer;
-          border: 2px solid white;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-        }
-
-        .volume-slider::-moz-range-thumb {
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          background: var(--accent);
-          cursor: pointer;
-          border: 2px solid white;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+          accent-color: var(--accent);
         }
 
         .volume-value {
-          font-size: 0.8rem;
+          font-size: 0.85rem;
           font-weight: 600;
           color: var(--text-secondary);
-          min-width: 36px;
+          min-width: 40px;
           text-align: right;
         }
 
-        /* Latency */
         .latency-info {
           display: flex;
           align-items: center;
           gap: 6px;
-          font-size: 0.8rem;
+          font-size: 0.85rem;
           color: var(--text-muted);
-          margin-bottom: 16px;
-        }
-
-        /* Autoplay button */
-        .autoplay-btn {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          width: 100%;
-          padding: 14px;
-          background: var(--success);
-          color: white;
-          border: none;
-          border-radius: var(--radius-md);
-          font-size: 1rem;
-          font-weight: 600;
-          cursor: pointer;
-          margin-bottom: 12px;
-          transition: all 0.2s ease;
-        }
-
-        .autoplay-btn:hover {
-          opacity: 0.9;
+          margin-bottom: 20px;
         }
 
         .disconnect-btn {
@@ -724,40 +767,74 @@ export default function ReceiverPage() {
           gap: 8px;
           width: 100%;
           padding: 12px;
-          border: 1px solid var(--error);
-          border-radius: var(--radius-md);
+          border: 1px solid var(--border-color);
           background: transparent;
-          color: var(--error);
-          font-size: 0.9rem;
-          font-weight: 600;
+          color: var(--text-secondary);
+          border-radius: var(--radius-md);
           cursor: pointer;
-          transition: all 0.2s ease;
+          font-weight: 600;
         }
 
         .disconnect-btn:hover {
-          background: var(--error);
-          color: white;
+          background: rgba(239, 68, 68, 0.1);
+          color: var(--error);
+          border-color: var(--error);
         }
 
-        .home-cta {
+        .home-cta-btn, .retry-btn {
           display: inline-flex;
           align-items: center;
           gap: 8px;
-          padding: 12px 24px;
-          margin-top: 16px;
-          font-size: 0.95rem;
-          font-weight: 600;
-          color: white;
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
-          border: none;
+          padding: 10px 20px;
           border-radius: var(--radius-md);
+          font-weight: 600;
           cursor: pointer;
-          transition: all 0.2s ease;
+          border: none;
+          margin-top: 12px;
         }
 
-        .home-cta:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+        .home-cta-btn {
+          background: var(--bg-card-hover);
+          color: var(--text-primary);
+        }
+
+        .retry-btn {
+          background: var(--accent);
+          color: white;
+        }
+
+        .action-buttons-row {
+          display: flex;
+          gap: 12px;
+        }
+
+        .autoplay-banner {
+          background: rgba(245, 158, 11, 0.15);
+          color: var(--warning);
+          border: 1px solid rgba(245, 158, 11, 0.3);
+          padding: 10px 14px;
+          border-radius: var(--radius-md);
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 0.85rem;
+          margin-bottom: 16px;
+        }
+
+        .autoplay-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          width: 100%;
+          padding: 14px;
+          background: var(--warning);
+          color: white;
+          border: none;
+          border-radius: var(--radius-md);
+          font-weight: 700;
+          cursor: pointer;
+          margin-bottom: 12px;
         }
       `}</style>
     </div>
