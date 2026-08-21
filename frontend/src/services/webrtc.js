@@ -12,7 +12,11 @@ export function createPeerConnection(iceServers = []) {
       : [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
         ],
+    iceCandidatePoolSize: 10,
   };
 
   return new RTCPeerConnection(defaultConfig);
@@ -25,12 +29,13 @@ export function createPeerConnection(iceServers = []) {
 export async function captureDisplayAudio() {
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: true, // Required by spec even though we only want audio
+      video: true, // Required by browser spec to prompt tab/screen selection
       audio: {
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false,
         sampleRate: 48000,
+        channelCount: 2,
       },
     });
 
@@ -38,22 +43,25 @@ export async function captureDisplayAudio() {
     const audioTracks = stream.getAudioTracks();
 
     if (audioTracks.length === 0) {
-      // Stop all tracks (including video) if no audio
+      // Stop all tracks if user forgot to check 'Share audio'
       stream.getTracks().forEach((track) => track.stop());
       throw new Error(
-        'No audio track available. Make sure to enable "Share audio" when prompted.'
+        'No audio track detected! Make sure you checked the "Share tab audio" or "Also share tab audio" checkbox in the browser popup.'
       );
     }
 
-    // Stop video tracks — we don't need video
-    stream.getVideoTracks().forEach((track) => track.stop());
+    // Disable video track so it consumes 0 CPU/GPU, but do NOT call stop()
+    // because stopping the video track terminates the capture session in Chromium.
+    stream.getVideoTracks().forEach((track) => {
+      track.enabled = false;
+    });
 
-    // Create a new stream with only audio
+    // Create a dedicated audio stream
     const audioStream = new MediaStream(audioTracks);
     return { stream: audioStream, screenStream: stream };
   } catch (err) {
     if (err.name === 'NotAllowedError') {
-      throw new Error('Screen capture permission denied. Please allow screen/audio sharing.');
+      throw new Error('Screen capture permission was cancelled. Please allow tab/audio sharing.');
     }
     if (err.name === 'NotFoundError') {
       throw new Error('No audio source found. Make sure you selected a tab with audio and enabled "Share audio".');

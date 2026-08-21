@@ -14,10 +14,11 @@ import {
   Speaker,
   QrCode,
   Keyboard,
+  Play,
 } from 'lucide-react';
 import ThemeToggle from '../components/ThemeToggle.jsx';
 import QrScannerModal from '../components/QrScannerModal.jsx';
-import { connectSocket, disconnectSocket } from '../services/socket.js';
+import { connectSocket, disconnectSocket, fetchIceServers } from '../services/socket.js';
 import {
   createPeerConnection,
   createAudioVisualizer,
@@ -46,7 +47,7 @@ export default function ReceiverPage() {
 
   const [state, setState] = useState(STATES.IDLE);
   const [errorMsg, setErrorMsg] = useState('');
-  const [volume, setVolume] = useState(0.8);
+  const [volume, setVolume] = useState(0.9);
   const [muted, setMuted] = useState(false);
   const [latency, setLatency] = useState(null);
   const [audioLevel, setAudioLevel] = useState(0);
@@ -54,7 +55,8 @@ export default function ReceiverPage() {
 
   const socketRef = useRef(null);
   const peerConnectionRef = useRef(null);
-  const audioRef = useRef(null);
+  const senderSocketIdRef = useRef(null);
+  const audioElementRef = useRef(null);
   const visualizerRef = useRef(null);
   const statsIntervalRef = useRef(null);
 
@@ -82,13 +84,14 @@ export default function ReceiverPage() {
       visualizerRef.current.stop();
       visualizerRef.current = null;
     }
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.srcObject = null;
-      audioRef.current = null;
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      audioElementRef.current.srcObject = null;
     }
     cleanupPeerConnection(peerConnectionRef.current);
     peerConnectionRef.current = null;
+    senderSocketIdRef.current = null;
+
     if (socketRef.current) {
       socketRef.current.off('offer');
       socketRef.current.off('answer');
@@ -110,12 +113,12 @@ export default function ReceiverPage() {
   }, [cleanup, navigate]);
 
   const handleStartAudio = useCallback(async () => {
-    if (audioRef.current) {
+    if (audioElementRef.current) {
       try {
-        await audioRef.current.play();
+        await audioElementRef.current.play();
         setAutoplayBlocked(false);
-      } catch {
-        // Still blocked
+      } catch (err) {
+        console.warn('[Audio] User play error:', err);
       }
     }
   }, []);
@@ -127,6 +130,11 @@ export default function ReceiverPage() {
       return;
     }
 
+    // Pre-unlock mobile audio element on user click
+    if (audioElementRef.current) {
+      audioElementRef.current.play().catch(() => {});
+    }
+
     setActiveRoomId(target);
     setState(STATES.CONNECTING);
     setErrorMsg('');
@@ -135,6 +143,9 @@ export default function ReceiverPage() {
       // Connect to signaling server
       const socket = await connectSocket();
       socketRef.current = socket;
+
+      // Fetch ICE servers
+      const iceServers = await fetchIceServers();
 
       // Join room
       const joinResult = await new Promise((resolve, reject) => {
@@ -147,70 +158,78 @@ export default function ReceiverPage() {
         });
       });
 
-      // Create peer connection
-      const pc = createPeerConnection();
+      if (joinResult?.senderSocketId) {
+        senderSocketIdRef.current = joinResult.senderSocketId;
+      }
+
+      // Create peer connection with ICE servers
+      const pc = createPeerConnection(iceServers);
       peerConnectionRef.current = pc;
 
       pc.onconnectionstatechange = () => {
         console.log('[WebRTC] Receiver connection state:', pc.connectionState);
         if (pc.connectionState === 'connected') {
           setState(STATES.PLAYING);
+          if (statsIntervalRef.current) clearInterval(statsIntervalRef.current);
           statsIntervalRef.current = setInterval(async () => {
-            if (pc) {
-              const stats = await getConnectionStats(pc);
+            if (peerConnectionRef.current) {
+              const stats = await getConnectionStats(peerConnectionRef.current);
               setLatency(stats.latency);
             }
           }, 3000);
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          console.warn('[WebRTC] Connection lost or closed by peer');
           handleDisconnect();
         }
       };
 
       // Handle incoming audio track
       pc.ontrack = (event) => {
-        console.log('[WebRTC] Received track:', event.track.kind);
-        const [remoteStream] = event.streams;
+        console.log('[WebRTC] Audio track received from computer:', event.track);
+        const remoteStream = event.streams[0] || new MediaStream([event.track]);
 
-        if (!audioRef.current) {
-          audioRef.current = new Audio();
-          audioRef.current.autoplay = true;
-          audioRef.current.playsInline = true;
+        if (audioElementRef.current) {
+          audioElementRef.current.srcObject = remoteStream;
+          audioElementRef.current.volume = muted ? 0 : volume;
+
+          audioElementRef.current.play()
+            .then(() => {
+              setAutoplayBlocked(false);
+              setState(STATES.PLAYING);
+
+              try {
+                const vis = createAudioVisualizer(remoteStream);
+                visualizerRef.current = vis;
+                vis.startLoop((level) => {
+                  setAudioLevel(level);
+                });
+              } catch (visErr) {
+                console.warn('[Visualizer] Error:', visErr);
+              }
+            })
+            .catch((err) => {
+              console.warn('[WebRTC] Autoplay requires user tap:', err);
+              setAutoplayBlocked(true);
+              setState(STATES.PLAYING);
+            });
         }
-
-        audioRef.current.srcObject = remoteStream;
-        audioRef.current.volume = muted ? 0 : volume;
-
-        audioRef.current.play()
-          .then(() => {
-            setAutoplayBlocked(false);
-            setState(STATES.PLAYING);
-
-            try {
-              const vis = createAudioVisualizer(remoteStream);
-              visualizerRef.current = vis;
-              vis.startLoop((level) => {
-                setAudioLevel(level);
-              });
-            } catch {
-              // Visualizer optional
-            }
-          })
-          .catch(() => {
-            setAutoplayBlocked(true);
-            setState(STATES.PLAYING);
-          });
       };
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          socket.emit('ice-candidate', {
-            to: joinResult.senderSocketId,
-            candidate: event.candidate,
-          });
+          const peerId = senderSocketIdRef.current || joinResult?.senderSocketId;
+          if (peerId) {
+            socket.emit('ice-candidate', {
+              to: peerId,
+              candidate: event.candidate,
+            });
+          }
         }
       };
 
+      // Handle offer from sender
       socket.on('offer', async ({ from, offer }) => {
+        senderSocketIdRef.current = from;
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -221,23 +240,27 @@ export default function ReceiverPage() {
         });
       });
 
+      // Handle ICE candidate from sender
       socket.on('ice-candidate', async ({ candidate }) => {
         try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          if (peerConnectionRef.current) {
+            await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+          }
         } catch (err) {
           console.error('[WebRTC] Error adding ICE candidate:', err);
         }
       });
 
+      // Handle sender disconnect
       socket.on('peer-disconnected', ({ role }) => {
         if (role === 'sender') {
           handleDisconnect();
         }
       });
     } catch (err) {
-      console.error('[Receiver] Error:', err);
+      console.error('[Receiver] Connection error:', err);
       setState(STATES.FAILED);
-      setErrorMsg(err.message || 'Failed to connect');
+      setErrorMsg(err.message || 'Failed to connect to the computer');
     }
   }, [activeRoomId, volume, muted, handleDisconnect]);
 
@@ -251,8 +274,8 @@ export default function ReceiverPage() {
 
   // Update volume when changed
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = muted ? 0 : volume;
+    if (audioElementRef.current) {
+      audioElementRef.current.volume = muted ? 0 : volume;
     }
   }, [volume, muted]);
 
@@ -279,7 +302,7 @@ export default function ReceiverPage() {
                     Room Code: <span className="room-badge">{activeRoomId}</span>
                   </p>
                   <p className="receiver-desc">
-                    Your phone will become the wireless speaker for this computer. Make sure your device volume is turned up!
+                    Your phone will stream the computer's tab audio. Make sure your phone's media volume is turned UP!
                   </p>
                   <button className="connect-btn" onClick={() => joinRoomWithId(activeRoomId)}>
                     <Volume2 size={20} />
@@ -297,7 +320,7 @@ export default function ReceiverPage() {
 
                   <button className="scan-qr-btn" onClick={() => setIsScannerOpen(true)}>
                     <QrCode size={20} />
-                    <span>Scan QR Code</span>
+                    <span>Scan QR Code with Camera</span>
                   </button>
 
                   <div className="code-input-group">
@@ -337,7 +360,7 @@ export default function ReceiverPage() {
             <div className="receiver-card">
               <Loader2 className="spinner" size={48} />
               <h2>Connecting...</h2>
-              <p>Joining room <span className="room-badge">{activeRoomId}</span></p>
+              <p>Connecting to room <span className="room-badge">{activeRoomId}</span></p>
             </div>
           </div>
         );
@@ -350,17 +373,25 @@ export default function ReceiverPage() {
               {autoplayBlocked && (
                 <div className="autoplay-banner animate-slide-up">
                   <AlertTriangle size={18} />
-                  <span>Tap the button below to start audio playback</span>
+                  <span>Tap below to start phone audio playback</span>
                 </div>
               )}
 
               <div className="playing-status">
                 <div className="status-icon-pulse">
-                  <CheckCircle2 size={48} />
+                  <CheckCircle2 size={44} />
                 </div>
-                <h2>🔊 Connected</h2>
-                <p>Playing audio from computer in room <span className="room-badge">{activeRoomId}</span></p>
+                <h2>🔊 Audio Playing</h2>
+                <p>Streaming from PC in room <span className="room-badge">{activeRoomId}</span></p>
               </div>
+
+              {/* Autoplay button if browser requires gesture */}
+              {autoplayBlocked && (
+                <button className="autoplay-btn animate-scale-in" onClick={handleStartAudio}>
+                  <Play size={18} />
+                  <span>Tap to Enable Speaker Sound</span>
+                </button>
+              )}
 
               {/* Audio level visualizer */}
               <div className="phone-visualizer">
@@ -368,7 +399,7 @@ export default function ReceiverPage() {
                   <div
                     key={i}
                     className={`phone-bar ${audioLevel > i / 12 ? 'active' : ''}`}
-                    style={{ height: `${Math.max(4, audioLevel * 30 * (1 - Math.abs(i - 6) / 6))}px` }}
+                    style={{ height: `${Math.max(4, audioLevel * 36 * (1 - Math.abs(i - 6) / 6))}px` }}
                   />
                 ))}
               </div>
@@ -403,17 +434,9 @@ export default function ReceiverPage() {
               <div className="latency-info">
                 <Wifi size={14} />
                 <span>
-                  {latency !== null ? `Latency: ${latency} ms` : 'P2P Connected'}
+                  {latency !== null ? `Latency: ${latency} ms` : 'Encrypted P2P Connected'}
                 </span>
               </div>
-
-              {/* Autoplay button */}
-              {autoplayBlocked && (
-                <button className="autoplay-btn" onClick={handleStartAudio}>
-                  <Volume2 size={18} />
-                  <span>Tap to Start Audio</span>
-                </button>
-              )}
 
               <button className="disconnect-btn" onClick={handleDisconnect}>
                 <WifiOff size={16} />
@@ -429,11 +452,16 @@ export default function ReceiverPage() {
             <div className="receiver-card">
               <WifiOff size={48} className="disconnected-icon" />
               <h2>Disconnected</h2>
-              <p>The audio stream has ended.</p>
-              <button className="home-cta-btn" onClick={handleBack}>
-                <ArrowLeft size={18} />
-                Return Home
-              </button>
+              <p>The audio stream was closed.</p>
+              <div className="action-buttons-row">
+                <button className="retry-btn" onClick={() => joinRoomWithId(activeRoomId)}>
+                  Reconnect
+                </button>
+                <button className="home-cta-btn" onClick={handleBack}>
+                  <ArrowLeft size={18} />
+                  Home
+                </button>
+              </div>
             </div>
           </div>
         );
@@ -481,6 +509,15 @@ export default function ReceiverPage() {
   return (
     <div className="receiver-page">
       <ThemeToggle />
+
+      {/* Hidden real audio DOM element for mobile playback */}
+      <audio
+        ref={audioElementRef}
+        autoPlay
+        playsInline
+        style={{ position: 'fixed', top: -9999, left: -9999, opacity: 0, pointerEvents: 'none' }}
+      />
+
       {renderContent()}
 
       <QrScannerModal
@@ -682,15 +719,15 @@ export default function ReceiverPage() {
 
         /* Playing state */
         .playing-status {
-          margin-bottom: 20px;
+          margin-bottom: 16px;
         }
 
         .status-icon-pulse {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          width: 72px;
-          height: 72px;
+          width: 68px;
+          height: 68px;
           border-radius: 50%;
           background: rgba(34, 197, 94, 0.15);
           color: var(--success);
@@ -785,17 +822,17 @@ export default function ReceiverPage() {
           display: inline-flex;
           align-items: center;
           gap: 8px;
-          padding: 10px 20px;
+          padding: 11px 22px;
           border-radius: var(--radius-md);
           font-weight: 600;
           cursor: pointer;
           border: none;
-          margin-top: 12px;
         }
 
         .home-cta-btn {
           background: var(--bg-card-hover);
           color: var(--text-primary);
+          border: 1px solid var(--border-color);
         }
 
         .retry-btn {
@@ -806,6 +843,7 @@ export default function ReceiverPage() {
         .action-buttons-row {
           display: flex;
           gap: 12px;
+          margin-top: 14px;
         }
 
         .autoplay-banner {
@@ -818,7 +856,7 @@ export default function ReceiverPage() {
           align-items: center;
           gap: 8px;
           font-size: 0.85rem;
-          margin-bottom: 16px;
+          margin-bottom: 14px;
         }
 
         .autoplay-btn {
@@ -828,13 +866,15 @@ export default function ReceiverPage() {
           gap: 8px;
           width: 100%;
           padding: 14px;
-          background: var(--warning);
+          background: linear-gradient(135deg, #f59e0b, #d97706);
           color: white;
           border: none;
           border-radius: var(--radius-md);
           font-weight: 700;
+          font-size: 0.95rem;
           cursor: pointer;
-          margin-bottom: 12px;
+          margin-bottom: 14px;
+          box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
         }
       `}</style>
     </div>

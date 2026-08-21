@@ -155,21 +155,28 @@ export default function SenderPage() {
         console.log('[WebRTC] Connection state:', pc.connectionState);
         if (pc.connectionState === 'connected') {
           setState(STATES.STREAMING);
-          // Start latency stats
+          if (statsIntervalRef.current) clearInterval(statsIntervalRef.current);
           statsIntervalRef.current = setInterval(async () => {
-            if (pc) {
-              const stats = await getConnectionStats(pc);
+            if (peerConnectionRef.current) {
+              const stats = await getConnectionStats(peerConnectionRef.current);
               setLatency(stats.latency);
             }
           }, 3000);
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          handleDisconnect();
+          console.log('[WebRTC] Peer disconnected, waiting for reconnection...');
+          if (statsIntervalRef.current) {
+            clearInterval(statsIntervalRef.current);
+            statsIntervalRef.current = null;
+          }
+          cleanupPeerConnection(peerConnectionRef.current);
+          peerConnectionRef.current = null;
+          setState(STATES.WAITING);
         }
       };
 
       return pc;
     },
-    [handleDisconnect]
+    []
   );
 
   const startStreaming = useCallback(
@@ -266,18 +273,28 @@ export default function SenderPage() {
           }
         });
 
-        // Handle receiver disconnect
+        // Handle receiver disconnect (keep room & audio stream active so phone can reconnect)
         socket.on('receiver-left', () => {
-          cleanup();
+          console.log('[Sender] Receiver left, keeping room open for reconnect');
+          if (statsIntervalRef.current) {
+            clearInterval(statsIntervalRef.current);
+            statsIntervalRef.current = null;
+          }
+          cleanupPeerConnection(peerConnectionRef.current);
+          peerConnectionRef.current = null;
           setState(STATES.WAITING);
-          // Re-create the waiting state with existing room
-          setRoomId(newRoomId);
-          // Re-setup socket listeners for next connection
         });
 
         socket.on('peer-disconnected', ({ role }) => {
           if (role === 'receiver') {
-            handleDisconnect();
+            console.log('[Sender] Receiver disconnected, waiting for reconnection');
+            if (statsIntervalRef.current) {
+              clearInterval(statsIntervalRef.current);
+              statsIntervalRef.current = null;
+            }
+            cleanupPeerConnection(peerConnectionRef.current);
+            peerConnectionRef.current = null;
+            setState(STATES.WAITING);
           }
         });
 

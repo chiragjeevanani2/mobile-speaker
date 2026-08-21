@@ -116,21 +116,33 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join-room', ({ roomId }, callback) => {
-    const room = rooms.get(roomId);
+    const cleanRoomId = (roomId || '').trim().toUpperCase();
+    const room = rooms.get(cleanRoomId);
+
     if (!room) {
-      if (typeof callback === 'function') callback({ success: false, error: 'Room not found' });
+      if (typeof callback === 'function') callback({ success: false, error: 'Room not found. Please verify the code or scan again.' });
       return;
     }
-    if (room.receiverSocketId) {
-      if (typeof callback === 'function') callback({ success: false, error: 'Room is full' });
-      return;
-    }
+
+    // Set or replace receiver socket ID (allows reconnecting if disconnected)
     room.receiverSocketId = socket.id;
-    socket.join(roomId);
-    socket.data.roomId = roomId;
+    socket.join(cleanRoomId);
+    socket.data.roomId = cleanRoomId;
     socket.data.role = 'receiver';
+
+    console.log(`Receiver ${socket.id} joined room ${cleanRoomId} (Sender: ${room.senderSocketId})`);
+
+    // Notify sender that receiver has joined
     io.to(room.senderSocketId).emit('receiver-joined', { receiverSocketId: socket.id });
-    if (typeof callback === 'function') callback({ success: true, roomId });
+
+    // Return success WITH senderSocketId for direct signaling
+    if (typeof callback === 'function') {
+      callback({
+        success: true,
+        roomId: cleanRoomId,
+        senderSocketId: room.senderSocketId,
+      });
+    }
   });
 
   socket.on('offer', ({ to, offer }) => {
@@ -142,7 +154,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('ice-candidate', ({ to, candidate }) => {
-    io.to(to).emit('ice-candidate', { from: socket.id, candidate });
+    if (to && candidate) {
+      io.to(to).emit('ice-candidate', { from: socket.id, candidate });
+    }
   });
 
   socket.on('peer-disconnect', () => {
@@ -150,13 +164,17 @@ io.on('connection', (socket) => {
     if (!roomId) return;
     const room = rooms.get(roomId);
     if (!room) return;
+
     const peerId = socket.data.role === 'sender' ? room.receiverSocketId : room.senderSocketId;
     if (peerId) io.to(peerId).emit('peer-disconnected', { role: socket.data.role });
+
     if (socket.data.role === 'sender') {
       rooms.delete(roomId);
+      console.log(`Sender closed room ${roomId}`);
     } else {
       room.receiverSocketId = null;
       if (room.senderSocketId) io.to(room.senderSocketId).emit('receiver-left');
+      console.log(`Receiver left room ${roomId}, room kept open for reconnect`);
     }
   });
 
@@ -165,12 +183,15 @@ io.on('connection', (socket) => {
     if (!roomId) return;
     const room = rooms.get(roomId);
     if (!room) return;
+
     if (socket.data.role === 'sender') {
       if (room.receiverSocketId) io.to(room.receiverSocketId).emit('peer-disconnected', { role: 'sender' });
       rooms.delete(roomId);
+      console.log(`Sender disconnected, deleted room ${roomId}`);
     } else {
       room.receiverSocketId = null;
       if (room.senderSocketId) io.to(room.senderSocketId).emit('receiver-left');
+      console.log(`Receiver disconnected from room ${roomId}`);
     }
   });
 });
