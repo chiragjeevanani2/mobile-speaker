@@ -53,8 +53,9 @@ app.get('/api/config', (_req, res) => {
 });
 
 // === START SERVER (Render recommended pattern: app.listen) ===
-const server = app.listen(PORT, () => {
-  console.log('Hear This server listening on port ' + PORT);
+const HOST = '0.0.0.0';
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Hear This server listening on ${HOST}:${PORT}`);
   console.log('CORS origin: ' + CORS_ORIGIN);
 });
 
