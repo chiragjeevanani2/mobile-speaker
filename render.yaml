@@ -6,6 +6,8 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     envVars:
+      - key: PORT
+        value: '10000'
       - key: CORS_ORIGIN
         sync: false
         value: https://mobile-speaker-cj.vercel.app

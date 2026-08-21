@@ -1,9 +1,11 @@
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const { Server } = require('socket.io');
 
 const app = express();
-const PORT = parseInt(process.env.PORT, 10) || 10000;
+const PORT = process.env.PORT || 10000;
+const HOST = '0.0.0.0';
 
 const CORS_ORIGIN = (process.env.CORS_ORIGIN || 'http://localhost:5173').replace(/\/+$/, '');
 
@@ -52,14 +54,9 @@ app.get('/api/config', (_req, res) => {
   res.json({ iceServers });
 });
 
-// === START SERVER (Render recommended pattern: app.listen) ===
-const HOST = '0.0.0.0';
-const server = app.listen(PORT, HOST, () => {
-  console.log(`Hear This server listening on ${HOST}:${PORT}`);
-  console.log('CORS origin: ' + CORS_ORIGIN);
-});
+// === HTTP SERVER & SOCKET.IO ===
+const server = http.createServer(app);
 
-// === SOCKET.IO ===
 const io = new Server(server, {
   cors: {
     origin: isAllowedOrigin,
@@ -68,6 +65,11 @@ const io = new Server(server, {
   },
   pingTimeout: 20000,
   pingInterval: 10000,
+});
+
+server.listen(Number(PORT), HOST, () => {
+  console.log(`Hear This server listening on ${HOST}:${PORT}`);
+  console.log('CORS origin: ' + CORS_ORIGIN);
 });
 
 io.on('connection', (socket) => {
