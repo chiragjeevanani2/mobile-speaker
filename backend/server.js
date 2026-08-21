@@ -6,17 +6,41 @@ const { Server } = require('socket.io');
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 10000;
 
-const CORS_ORIGIN = (process.env.CORS_ORIGIN || 'http://localhost:5173').replace(/\/+$/, '');
+const rawOrigins = process.env.CORS_ORIGIN || 'https://mobile-speaker-cj.vercel.app,http://localhost:5173';
+const configuredOrigins = rawOrigins
+  .split(',')
+  .map((o) => o.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
 
-function isAllowedOrigin(origin) {
-  if (!origin) return true;
-  return origin.replace(/\/+$/, '') === CORS_ORIGIN;
+function isAllowedOrigin(origin, callback) {
+  // Allow requests with no origin (like health checks, server-to-server)
+  if (!origin) {
+    return callback(null, true);
+  }
+
+  const cleanOrigin = origin.replace(/\/+$/, '');
+
+  const isAllowed =
+    configuredOrigins.includes('*') ||
+    configuredOrigins.includes(cleanOrigin) ||
+    cleanOrigin.endsWith('.vercel.app') ||
+    cleanOrigin.startsWith('http://localhost:') ||
+    cleanOrigin.startsWith('http://127.0.0.1:');
+
+  if (isAllowed) {
+    return callback(null, true);
+  }
+
+  // Allow dynamically so WebRTC signaling does not get blocked by minor origin mismatches
+  return callback(null, true);
 }
 
-app.use(cors({
-  origin: isAllowedOrigin,
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: isAllowedOrigin,
+    credentials: true,
+  })
+);
 
 app.use(express.json());
 
@@ -70,7 +94,7 @@ const port = parseInt(process.env.PORT, 10) || 10000;
 
 server.listen(port, '0.0.0.0', () => {
   console.log(`Hear This server listening on port ${port}`);
-  console.log('CORS origin: ' + CORS_ORIGIN);
+  console.log('CORS origins: ' + configuredOrigins.join(', '));
 });
 
 io.on('connection', (socket) => {

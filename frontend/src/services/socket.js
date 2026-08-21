@@ -1,6 +1,7 @@
 import { io } from 'socket.io-client';
 
-const SIGNALING_SERVER = import.meta.env.VITE_SIGNALING_SERVER || 'http://localhost:3001';
+const rawServer = import.meta.env.VITE_SIGNALING_SERVER || 'http://localhost:10000';
+const SIGNALING_SERVER = rawServer.trim().replace(/\/+$/, '');
 
 let socket = null;
 
@@ -15,8 +16,8 @@ export function getSocket() {
       reconnectionAttempts: 15,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      timeout: 30000, // 30 seconds — Render free tier cold starts can be slow
-      transports: ['polling', 'websocket'], // Start with polling, upgrade to websocket
+      timeout: 30000, // Render free tier cold starts can take a moment
+      transports: ['polling', 'websocket'],
     });
   }
   return socket;
