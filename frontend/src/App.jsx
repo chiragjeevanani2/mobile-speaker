@@ -9,6 +9,7 @@ export default function App() {
     <ThemeProvider>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/sender" element={<SenderPage />} />
         <Route path="/speaker/:roomId" element={<ReceiverPage />} />
         <Route path="*" element={<HomePage />} />
       </Routes>
