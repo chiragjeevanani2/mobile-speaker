@@ -12,10 +12,11 @@ export function getSocket() {
     socket = io(SIGNALING_SERVER, {
       autoConnect: false,
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: 15,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      timeout: 10000,
+      timeout: 30000, // 30 seconds — Render free tier cold starts can be slow
+      transports: ['polling', 'websocket'], // Start with polling, upgrade to websocket
     });
   }
   return socket;
@@ -35,16 +36,25 @@ export function connectSocket() {
 
     const onConnect = () => {
       s.off('connect_error', onError);
+      s.off('connect_timeout', onTimeout);
       resolve(s);
     };
 
     const onError = (err) => {
       s.off('connect', onConnect);
+      s.off('connect_timeout', onTimeout);
       reject(err);
+    };
+
+    const onTimeout = () => {
+      s.off('connect', onConnect);
+      s.off('connect_error', onError);
+      reject(new Error('Connection timed out. The server may be starting up, please try again in a moment.'));
     };
 
     s.once('connect', onConnect);
     s.once('connect_error', onError);
+    s.once('connect_timeout', onTimeout);
     s.connect();
   });
 }

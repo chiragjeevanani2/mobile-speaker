@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { setupSocketHandlers } from './socket/handlers.js';
@@ -11,9 +12,15 @@ const CORS_ORIGIN = (process.env.CORS_ORIGIN || 'http://localhost:5173').replace
 
 // Normalize origins: strip trailing slashes so browser CORS always matches
 function isAllowedOrigin(origin) {
-  if (!origin) return false;
+  if (!origin) return true; // Allow server-to-server requests with no origin
   return origin.replace(/\/+$/, '') === CORS_ORIGIN;
 }
+
+// Express CORS middleware
+app.use(cors({
+  origin: isAllowedOrigin,
+  credentials: true,
+}));
 
 const io = new Server(httpServer, {
   cors: {
