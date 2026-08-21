@@ -4,8 +4,7 @@ const cors = require('cors');
 const { Server } = require('socket.io');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
-const HOST = '0.0.0.0';
+const PORT = parseInt(process.env.PORT, 10) || 10000;
 
 const CORS_ORIGIN = (process.env.CORS_ORIGIN || 'http://localhost:5173').replace(/\/+$/, '');
 
@@ -67,8 +66,10 @@ const io = new Server(server, {
   pingInterval: 10000,
 });
 
-server.listen(Number(PORT), HOST, () => {
-  console.log(`Hear This server listening on ${HOST}:${PORT}`);
+const port = parseInt(process.env.PORT, 10) || 10000;
+
+server.listen(port, '0.0.0.0', () => {
+  console.log(`Hear This server listening on port ${port}`);
   console.log('CORS origin: ' + CORS_ORIGIN);
 });
 
