@@ -4,12 +4,12 @@ services:
     name: hear-this-api
     runtime: node
     rootDir: backend
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && node server.js
     envVars:
       - key: CORS_ORIGIN
         sync: false
-        value: https://your-project.vercel.app
+        value: https://mobile-speaker-cj.vercel.app
       - key: ICE_SERVERS
         value: '[{"urls":"stun:stun.l.google.com:19302"},{"urls":"stun:stun1.l.google.com:19302"}]'
       - key: ROOM_EXPIRATION_MS

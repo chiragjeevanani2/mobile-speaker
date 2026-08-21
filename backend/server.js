@@ -7,12 +7,11 @@ import { setupSocketHandlers } from './socket/handlers.js';
 const app = express();
 const httpServer = createServer(app);
 
-const PORT = process.env.PORT || 3001;
 const CORS_ORIGIN = (process.env.CORS_ORIGIN || 'http://localhost:5173').replace(/\/+$/, '');
 
 // Normalize origins: strip trailing slashes so browser CORS always matches
 function isAllowedOrigin(origin) {
-  if (!origin) return true; // Allow server-to-server requests with no origin
+  if (!origin) return true;
   return origin.replace(/\/+$/, '') === CORS_ORIGIN;
 }
 
@@ -35,6 +34,11 @@ const io = new Server(httpServer, {
 // Parse JSON for REST endpoints
 app.use(express.json());
 
+// Root route — Render health check hits this
+app.get('/', (_req, res) => {
+  res.json({ status: 'ok', service: 'hear-this' });
+});
+
 // Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
@@ -54,7 +58,9 @@ app.get('/api/config', (_req, res) => {
 // Setup Socket.IO handlers
 setupSocketHandlers(io);
 
-httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log('Hear This server running on port ' + PORT);
+// Start server
+const port = process.env.PORT || 3001;
+httpServer.listen(port, () => {
+  console.log('Hear This server running on port ' + port);
   console.log('CORS origin: ' + CORS_ORIGIN);
 });
