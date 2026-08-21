@@ -1,9 +1,9 @@
 /**
- * WebRTC service for managing peer connections, media capture, and audio streaming.
+ * WebRTC service for managing peer connections, media capture, audio synchronization, and low-latency streaming.
  */
 
 /**
- * Create an RTCPeerConnection with the given ICE servers.
+ * Create an RTCPeerConnection with low-latency configuration and ICE servers.
  */
 export function createPeerConnection(iceServers = []) {
   const defaultConfig = {
@@ -17,14 +17,62 @@ export function createPeerConnection(iceServers = []) {
           { urls: 'stun:stun4.l.google.com:19302' },
         ],
     iceCandidatePoolSize: 10,
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require',
   };
 
   return new RTCPeerConnection(defaultConfig);
 }
 
 /**
- * Capture browser/tab audio using getDisplayMedia.
- * Returns the MediaStream with audio tracks.
+ * Mixes a media stream with a subtle continuous audio carrier.
+ * This guarantees the browser continuously emits RTP audio packets even when
+ * the source tab is silent/paused, preventing WebRTC DTLS/ICE stalls.
+ */
+export function createContinuousAudioStream(rawStream) {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      return { stream: rawStream, audioContext: null };
+    }
+
+    const audioCtx = new AudioContextClass({
+      sampleRate: 48000,
+      latencyHint: 'interactive',
+    });
+
+    const source = audioCtx.createMediaStreamSource(rawStream);
+    const destination = audioCtx.createMediaStreamDestination();
+
+    source.connect(destination);
+
+    // Continuous keepalive node (imperceptible silence carrier to keep RTP clock active)
+    if (audioCtx.createConstantSource) {
+      const constantSource = audioCtx.createConstantSource();
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.00001; // Inaudible
+      constantSource.connect(gain);
+      gain.connect(destination);
+      constantSource.start();
+    }
+
+    // Ensure audio context is running
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+
+    return {
+      stream: destination.stream,
+      audioContext: audioCtx,
+    };
+  } catch (err) {
+    console.warn('[WebRTC] Continuous audio mixer fallback to raw stream:', err);
+    return { stream: rawStream, audioContext: null };
+  }
+}
+
+/**
+ * Capture browser/tab audio using getDisplayMedia with continuous audio stream.
  */
 export async function captureDisplayAudio() {
   try {
@@ -39,26 +87,29 @@ export async function captureDisplayAudio() {
       },
     });
 
-    // We only need the audio tracks
     const audioTracks = stream.getAudioTracks();
 
     if (audioTracks.length === 0) {
-      // Stop all tracks if user forgot to check 'Share audio'
       stream.getTracks().forEach((track) => track.stop());
       throw new Error(
         'No audio track detected! Make sure you checked the "Share tab audio" or "Also share tab audio" checkbox in the browser popup.'
       );
     }
 
-    // Disable video track so it consumes 0 CPU/GPU, but do NOT call stop()
-    // because stopping the video track terminates the capture session in Chromium.
+    // Disable video track so it consumes 0 CPU/GPU without terminating the stream
     stream.getVideoTracks().forEach((track) => {
       track.enabled = false;
     });
 
-    // Create a dedicated audio stream
-    const audioStream = new MediaStream(audioTracks);
-    return { stream: audioStream, screenStream: stream };
+    const rawAudioStream = new MediaStream(audioTracks);
+    const continuous = createContinuousAudioStream(rawAudioStream);
+
+    return {
+      stream: continuous.stream,
+      rawAudioStream,
+      screenStream: stream,
+      audioContext: continuous.audioContext,
+    };
   } catch (err) {
     if (err.name === 'NotAllowedError') {
       throw new Error('Screen capture permission was cancelled. Please allow tab/audio sharing.');
@@ -71,7 +122,7 @@ export async function captureDisplayAudio() {
 }
 
 /**
- * Capture microphone audio for testing purposes.
+ * Capture microphone audio with continuous audio stream.
  */
 export async function captureMicrophoneAudio() {
   try {
@@ -81,9 +132,16 @@ export async function captureMicrophoneAudio() {
         noiseSuppression: false,
         autoGainControl: false,
         sampleRate: 48000,
+        channelCount: 2,
       },
     });
-    return stream;
+
+    const continuous = createContinuousAudioStream(stream);
+    return {
+      stream: continuous.stream,
+      rawAudioStream: stream,
+      audioContext: continuous.audioContext,
+    };
   } catch (err) {
     if (err.name === 'NotAllowedError') {
       throw new Error('Microphone permission denied. Please allow microphone access.');
@@ -107,28 +165,57 @@ export function addTracksToConnection(pc, stream) {
 }
 
 /**
- * Set up audio playback from a remote stream.
- * Returns the audio element for volume control.
+ * Optimizes SDP for ultra-low latency, constant bitrate, and multi-speaker synchronization.
  */
-export function setupAudioPlayback(stream, audioRef) {
-  if (!audioRef.current) {
-    audioRef.current = new Audio();
+export function optimizeAudioSdp(sdp) {
+  if (!sdp) return sdp;
+
+  // Optimize Opus payload parameters:
+  // ptime=10, minptime=10 (low packet time = 10ms frame latency)
+  // cbr=1 (constant bitrate to keep jitter buffer clocks synchronized across multiple devices)
+  // maxaveragebitrate=128000 (128 kbps high fidelity stereo)
+  // useinbandfec=1 (inband forward error correction for glitch-free streaming)
+  return sdp.replace(
+    /a=fmtp:(\d+) (.*)/g,
+    (match, payloadType, params) => {
+      if (params.includes('opus') || params.includes('minptime') || params.includes('useinbandfec')) {
+        return `a=fmtp:${payloadType} minptime=10;ptime=10;cbr=1;maxaveragebitrate=128000;stereo=1;sprop-stereo=1;useinbandfec=1;${params}`;
+      }
+      return match;
+    }
+  );
+}
+
+/**
+ * Configures fixed low-latency playout delay hints on all audio receivers.
+ * This ensures all connected phones sync their internal jitter buffers to ~40ms.
+ */
+export function configureLowLatencyPlayout(pc) {
+  if (!pc || !pc.getReceivers) return;
+
+  try {
+    pc.getReceivers().forEach((receiver) => {
+      if (receiver.track && receiver.track.kind === 'audio') {
+        // Set fixed playout delay (40ms) across all devices
+        if ('playoutDelayHint' in receiver) {
+          receiver.playoutDelayHint = 0.04;
+        }
+        if ('jitterBufferTarget' in receiver) {
+          receiver.jitterBufferTarget = 40;
+        }
+      }
+    });
+  } catch {
+    // Optional receiver hints
   }
-
-  const audio = audioRef.current;
-  audio.srcObject = stream;
-  audio.autoplay = true;
-  audio.playsInline = true;
-
-  return audio;
 }
 
 /**
  * Create an audio visualizer using Web Audio API.
- * Returns controls for the animation frame and level data.
  */
 export function createAudioVisualizer(stream) {
-  const audioContext = new AudioContext();
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  const audioContext = new AudioContextClass();
   const source = audioContext.createMediaStreamSource(stream);
   const analyser = audioContext.createAnalyser();
 
@@ -148,7 +235,7 @@ export function createAudioVisualizer(stream) {
     for (let i = 0; i < bufferLength; i++) {
       sum += dataArray[i];
     }
-    return sum / bufferLength / 255; // Normalized 0-1
+    return sum / bufferLength / 255;
   }
 
   function getFrequencyData() {
@@ -169,8 +256,10 @@ export function createAudioVisualizer(stream) {
       cancelAnimationFrame(animationId);
       animationId = null;
     }
-    source.disconnect();
-    audioContext.close();
+    try {
+      source.disconnect();
+      audioContext.close();
+    } catch {}
   }
 
   return { getLevel, getFrequencyData, startLoop, stop };
@@ -197,11 +286,13 @@ export async function getConnectionStats(pc) {
 }
 
 /**
- * Clean up a peer connection and its tracks.
+ * Clean up a peer connection.
  */
 export function cleanupPeerConnection(pc) {
   if (pc) {
-    pc.close();
+    try {
+      pc.close();
+    } catch {}
   }
 }
 
@@ -210,28 +301,8 @@ export function cleanupPeerConnection(pc) {
  */
 export function cleanupStream(stream) {
   if (stream) {
-    stream.getTracks().forEach((track) => track.stop());
+    try {
+      stream.getTracks().forEach((track) => track.stop());
+    } catch {}
   }
-}
-
-/**
- * Check browser support for required APIs.
- */
-export function checkBrowserSupport() {
-  const issues = [];
-
-  if (!window.RTCPeerConnection) {
-    issues.push('WebRTC is not supported in this browser');
-  }
-  if (!navigator.mediaDevices) {
-    issues.push('Media devices API is not available');
-  }
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    issues.push('Screen capture is not supported in this browser');
-  }
-
-  return {
-    supported: issues.length === 0,
-    issues,
-  };
 }

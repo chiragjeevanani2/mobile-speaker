@@ -31,6 +31,7 @@ import {
   getConnectionStats,
   cleanupPeerConnection,
   cleanupStream,
+  optimizeAudioSdp,
 } from '../services/webrtc.js';
 
 const STATES = {
@@ -166,11 +167,13 @@ export default function SenderPage() {
         state: 'connecting',
         latency: null,
         joinedAt: Date.now(),
+        pendingCandidates: [],
+        hasRemoteDescription: false,
       };
 
       peerConnectionsRef.current.set(receiverSocketId, receiverEntry);
 
-      // Add audio tracks from existing stream
+      // Add audio tracks from continuous stream
       addTracksToConnection(pc, stream);
 
       // ICE candidate routing
@@ -183,13 +186,25 @@ export default function SenderPage() {
         }
       };
 
-      // Connection state tracking
-      pc.onconnectionstatechange = () => {
-        console.log(`[Sender] Phone ${receiverSocketId} connection state:`, pc.connectionState);
-        if (pc.connectionState === 'connected') {
+      // Dual Connection & ICE state tracking
+      const checkAndUpdateState = () => {
+        const isConnected =
+          pc.connectionState === 'connected' ||
+          pc.iceConnectionState === 'connected' ||
+          pc.iceConnectionState === 'completed';
+
+        const isDisconnected =
+          pc.connectionState === 'failed' ||
+          pc.connectionState === 'closed' ||
+          pc.iceConnectionState === 'failed' ||
+          pc.iceConnectionState === 'closed';
+
+        if (isConnected && receiverEntry.state !== 'connected') {
+          console.log(`[Sender] Phone ${receiverSocketId} is fully connected & streaming!`);
           receiverEntry.state = 'connected';
           updateConnectedPhonesList();
-        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+        } else if (isDisconnected) {
+          console.log(`[Sender] Phone ${receiverSocketId} connection dropped.`);
           receiverEntry.state = 'disconnected';
           cleanupPeerConnection(pc);
           peerConnectionsRef.current.delete(receiverSocketId);
@@ -197,9 +212,18 @@ export default function SenderPage() {
         }
       };
 
+      pc.onconnectionstatechange = checkAndUpdateState;
+      pc.oniceconnectionstatechange = checkAndUpdateState;
+
       // Create and send WebRTC offer to this phone
       try {
-        const offer = await pc.createOffer();
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: false,
+          offerToReceiveVideo: false,
+        });
+
+        // Optimize SDP for ultra-low latency, constant bitrate, and multi-speaker synchronization
+        offer.sdp = optimizeAudioSdp(offer.sdp);
         await pc.setLocalDescription(offer);
 
         socket.emit('offer', {
@@ -232,7 +256,7 @@ export default function SenderPage() {
       setErrorMsg('');
 
       try {
-        // 1. Capture local audio
+        // 1. Capture local audio (with continuous silence carrier)
         let stream;
         let screenStream;
         try {
@@ -241,7 +265,8 @@ export default function SenderPage() {
             stream = result.stream;
             screenStream = result.screenStream;
           } else {
-            stream = await captureMicrophoneAudio();
+            const result = await captureMicrophoneAudio();
+            stream = result.stream;
           }
         } catch (err) {
           if (err.message.includes('cancelled') || err.message.includes('denied') || err.name === 'NotAllowedError') {
@@ -291,22 +316,43 @@ export default function SenderPage() {
           const entry = peerConnectionsRef.current.get(from);
           if (entry && entry.pc) {
             try {
+              answer.sdp = optimizeAudioSdp(answer.sdp);
               await entry.pc.setRemoteDescription(new RTCSessionDescription(answer));
+              entry.hasRemoteDescription = true;
               console.log(`[Sender] Remote description set for phone ${from}`);
+
+              // Flush any buffered candidates
+              if (entry.pendingCandidates && entry.pendingCandidates.length > 0) {
+                console.log(`[Sender] Flushing ${entry.pendingCandidates.length} buffered ICE candidates for phone ${from}`);
+                for (const cand of entry.pendingCandidates) {
+                  try {
+                    await entry.pc.addIceCandidate(cand);
+                  } catch (cErr) {
+                    console.warn('[Sender] Buffered candidate error:', cErr);
+                  }
+                }
+                entry.pendingCandidates = [];
+              }
             } catch (err) {
               console.error(`[Sender] Error setting remote description for phone ${from}:`, err);
             }
           }
         });
 
-        // ICE candidate from receiver
+        // ICE candidate from receiver (with queuing if remote description isn't set yet)
         socket.on('ice-candidate', async ({ from, candidate }) => {
           const entry = peerConnectionsRef.current.get(from);
           if (entry && entry.pc) {
-            try {
-              await entry.pc.addIceCandidate(new RTCIceCandidate(candidate));
-            } catch (err) {
-              console.error(`[Sender] Error adding ICE candidate from phone ${from}:`, err);
+            const iceCand = new RTCIceCandidate(candidate);
+            if (entry.hasRemoteDescription) {
+              try {
+                await entry.pc.addIceCandidate(iceCand);
+              } catch (err) {
+                console.error(`[Sender] Error adding ICE candidate from phone ${from}:`, err);
+              }
+            } else {
+              console.log(`[Sender] Buffering ICE candidate for phone ${from}`);
+              entry.pendingCandidates.push(iceCand);
             }
           }
         });

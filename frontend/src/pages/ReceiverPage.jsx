@@ -24,6 +24,8 @@ import {
   createAudioVisualizer,
   getConnectionStats,
   cleanupPeerConnection,
+  optimizeAudioSdp,
+  configureLowLatencyPlayout,
 } from '../services/webrtc.js';
 
 const STATES = {
@@ -59,6 +61,8 @@ export default function ReceiverPage() {
   const audioElementRef = useRef(null);
   const visualizerRef = useRef(null);
   const statsIntervalRef = useRef(null);
+  const pendingCandidatesRef = useRef([]);
+  const hasRemoteDescriptionRef = useRef(false);
 
   // Sync if URL param changes
   useEffect(() => {
@@ -91,6 +95,8 @@ export default function ReceiverPage() {
     cleanupPeerConnection(peerConnectionRef.current);
     peerConnectionRef.current = null;
     senderSocketIdRef.current = null;
+    pendingCandidatesRef.current = [];
+    hasRemoteDescriptionRef.current = false;
 
     if (socketRef.current) {
       socketRef.current.off('offer');
@@ -138,6 +144,8 @@ export default function ReceiverPage() {
     setActiveRoomId(target);
     setState(STATES.CONNECTING);
     setErrorMsg('');
+    pendingCandidatesRef.current = [];
+    hasRemoteDescriptionRef.current = false;
 
     try {
       // Connect to signaling server
@@ -166,26 +174,45 @@ export default function ReceiverPage() {
       const pc = createPeerConnection(iceServers);
       peerConnectionRef.current = pc;
 
-      pc.onconnectionstatechange = () => {
-        console.log('[WebRTC] Receiver connection state:', pc.connectionState);
-        if (pc.connectionState === 'connected') {
+      // Dual connection state tracking
+      const checkConnectionState = () => {
+        const isConnected =
+          pc.connectionState === 'connected' ||
+          pc.iceConnectionState === 'connected' ||
+          pc.iceConnectionState === 'completed';
+
+        const isFailed =
+          pc.connectionState === 'failed' ||
+          pc.connectionState === 'closed' ||
+          pc.iceConnectionState === 'failed' ||
+          pc.iceConnectionState === 'closed';
+
+        if (isConnected) {
+          console.log('[WebRTC] Receiver is connected and streaming!');
           setState(STATES.PLAYING);
-          if (statsIntervalRef.current) clearInterval(statsIntervalRef.current);
-          statsIntervalRef.current = setInterval(async () => {
-            if (peerConnectionRef.current) {
-              const stats = await getConnectionStats(peerConnectionRef.current);
-              setLatency(stats.latency);
-            }
-          }, 3000);
-        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          console.warn('[WebRTC] Connection lost or closed by peer');
+          configureLowLatencyPlayout(pc);
+
+          if (!statsIntervalRef.current) {
+            statsIntervalRef.current = setInterval(async () => {
+              if (peerConnectionRef.current) {
+                const stats = await getConnectionStats(peerConnectionRef.current);
+                setLatency(stats.latency);
+              }
+            }, 2500);
+          }
+        } else if (isFailed) {
+          console.warn('[WebRTC] Receiver connection failed or dropped.');
           handleDisconnect();
         }
       };
 
+      pc.onconnectionstatechange = checkConnectionState;
+      pc.oniceconnectionstatechange = checkConnectionState;
+
       // Handle incoming audio track
       pc.ontrack = (event) => {
         console.log('[WebRTC] Audio track received from computer:', event.track);
+        configureLowLatencyPlayout(pc);
         const remoteStream = event.streams[0] || new MediaStream([event.track]);
 
         if (audioElementRef.current) {
@@ -230,24 +257,49 @@ export default function ReceiverPage() {
       // Handle offer from sender
       socket.on('offer', async ({ from, offer }) => {
         senderSocketIdRef.current = from;
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
+        try {
+          offer.sdp = optimizeAudioSdp(offer.sdp);
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          hasRemoteDescriptionRef.current = true;
 
-        socket.emit('answer', {
-          to: from,
-          answer: pc.localDescription,
-        });
+          // Flush any buffered candidates
+          if (pendingCandidatesRef.current.length > 0) {
+            console.log(`[Receiver] Flushing ${pendingCandidatesRef.current.length} buffered ICE candidates`);
+            for (const cand of pendingCandidatesRef.current) {
+              try {
+                await pc.addIceCandidate(cand);
+              } catch (cErr) {
+                console.warn('[Receiver] Buffered candidate error:', cErr);
+              }
+            }
+            pendingCandidatesRef.current = [];
+          }
+
+          const answer = await pc.createAnswer();
+          answer.sdp = optimizeAudioSdp(answer.sdp);
+          await pc.setLocalDescription(answer);
+
+          socket.emit('answer', {
+            to: from,
+            answer: pc.localDescription,
+          });
+        } catch (err) {
+          console.error('[Receiver] Error processing offer:', err);
+        }
       });
 
-      // Handle ICE candidate from sender
+      // Handle ICE candidate from sender (with buffer)
       socket.on('ice-candidate', async ({ candidate }) => {
-        try {
-          if (peerConnectionRef.current) {
-            await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        const iceCand = new RTCIceCandidate(candidate);
+        if (hasRemoteDescriptionRef.current && peerConnectionRef.current) {
+          try {
+            await peerConnectionRef.current.addIceCandidate(iceCand);
+          } catch (err) {
+            console.error('[Receiver] Error adding ICE candidate:', err);
           }
-        } catch (err) {
-          console.error('[WebRTC] Error adding ICE candidate:', err);
+        } else {
+          console.log('[Receiver] Buffering ICE candidate until offer is processed');
+          pendingCandidatesRef.current.push(iceCand);
         }
       });
 
