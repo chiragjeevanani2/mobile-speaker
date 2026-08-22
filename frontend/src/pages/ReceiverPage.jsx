@@ -169,10 +169,21 @@ export default function ReceiverPage() {
     pendingCandidatesRef.current = [];
     hasRemoteDescriptionRef.current = false;
 
+    // Cleanup previous peer connection if any
+    if (peerConnectionRef.current) {
+      cleanupPeerConnection(peerConnectionRef.current);
+      peerConnectionRef.current = null;
+    }
+
     try {
       // Connect to signaling server
       const socket = await connectSocket();
       socketRef.current = socket;
+
+      // Clean old listeners to prevent duplicate triggers
+      socket.off('offer');
+      socket.off('ice-candidate');
+      socket.off('peer-disconnected');
 
       // Fetch ICE servers
       const iceServers = await fetchIceServers();
@@ -310,18 +321,19 @@ export default function ReceiverPage() {
         }
       });
 
-      // Handle ICE candidate from sender (with buffer)
+      // Handle ICE candidate from sender (with buffer and safe parsing)
       socket.on('ice-candidate', async ({ candidate }) => {
-        const iceCand = new RTCIceCandidate(candidate);
-        if (hasRemoteDescriptionRef.current && peerConnectionRef.current) {
-          try {
+        if (!candidate) return;
+        try {
+          const iceCand = candidate.candidate !== undefined ? candidate : new RTCIceCandidate(candidate);
+          if (hasRemoteDescriptionRef.current && peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
             await peerConnectionRef.current.addIceCandidate(iceCand);
-          } catch (err) {
-            console.error('[Receiver] Error adding ICE candidate:', err);
+          } else {
+            console.log('[Receiver] Buffering ICE candidate until offer is processed');
+            pendingCandidatesRef.current.push(iceCand);
           }
-        } else {
-          console.log('[Receiver] Buffering ICE candidate until offer is processed');
-          pendingCandidatesRef.current.push(iceCand);
+        } catch (err) {
+          console.warn('[Receiver] Error adding ICE candidate:', err);
         }
       });
 
@@ -584,12 +596,12 @@ export default function ReceiverPage() {
     <div className="receiver-page">
       <ThemeToggle />
 
-      {/* Hidden real audio DOM element for mobile playback */}
+      {/* Real audio DOM element for mobile playback */}
       <audio
         ref={audioElementRef}
         autoPlay
         playsInline
-        style={{ position: 'fixed', top: -9999, left: -9999, opacity: 0, pointerEvents: 'none' }}
+        style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0.01, pointerEvents: 'none' }}
       />
 
       {renderContent()}

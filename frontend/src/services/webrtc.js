@@ -5,18 +5,35 @@
 /**
  * Create an RTCPeerConnection with low-latency configuration and ICE servers.
  */
+export const DEFAULT_ICE_SERVERS = [
+  {
+    urls: [
+      'stun:stun.l.google.com:19302',
+      'stun:stun1.l.google.com:19302',
+      'stun:stun2.l.google.com:19302',
+      'stun:stun3.l.google.com:19302',
+      'stun:stun4.l.google.com:19302',
+    ],
+  },
+  {
+    urls: [
+      'stun:stun.cloudflare.com:3478',
+      'stun:global.stun.twilio.com:3478',
+      'stun:stun.freeswitch.org:3478',
+      'stun:stun.voiparound.com:3478',
+    ],
+  },
+];
+
+/**
+ * Create an RTCPeerConnection with low-latency configuration and ICE servers.
+ */
 export function createPeerConnection(iceServers = []) {
+  const configServers = iceServers && iceServers.length > 0 ? iceServers : DEFAULT_ICE_SERVERS;
+
   const defaultConfig = {
-    iceServers: iceServers.length > 0
-      ? iceServers
-      : [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun3.l.google.com:19302' },
-          { urls: 'stun:stun4.l.google.com:19302' },
-        ],
-    iceCandidatePoolSize: 10,
+    iceServers: configServers,
+    iceCandidatePoolSize: 1,
     bundlePolicy: 'max-bundle',
     rtcpMuxPolicy: 'require',
   };
@@ -159,31 +176,78 @@ export async function captureMicrophoneAudio() {
 export function addTracksToConnection(pc, stream) {
   const tracks = stream.getAudioTracks();
   tracks.forEach((track) => {
-    pc.addTrack(track, stream);
+    try {
+      if (pc.addTransceiver) {
+        pc.addTransceiver(track, {
+          direction: 'sendonly',
+          streams: [stream],
+        });
+      } else {
+        pc.addTrack(track, stream);
+      }
+    } catch {
+      pc.addTrack(track, stream);
+    }
   });
   return tracks;
 }
 
 /**
  * Optimizes SDP for ultra-low latency, constant bitrate, and multi-speaker synchronization.
+ * Parses format parameters cleanly into a Map to ensure idempotency and prevent duplicate keys.
  */
 export function optimizeAudioSdp(sdp) {
-  if (!sdp) return sdp;
+  if (!sdp || typeof sdp !== 'string') return sdp;
 
-  // Optimize Opus payload parameters:
-  // ptime=10, minptime=10 (low packet time = 10ms frame latency)
-  // cbr=1 (constant bitrate to keep jitter buffer clocks synchronized across multiple devices)
-  // maxaveragebitrate=128000 (128 kbps high fidelity stereo)
-  // useinbandfec=1 (inband forward error correction for glitch-free streaming)
-  return sdp.replace(
-    /a=fmtp:(\d+) (.*)/g,
-    (match, payloadType, params) => {
-      if (params.includes('opus') || params.includes('minptime') || params.includes('useinbandfec')) {
-        return `a=fmtp:${payloadType} minptime=10;ptime=10;cbr=1;maxaveragebitrate=128000;stereo=1;sprop-stereo=1;useinbandfec=1;${params}`;
-      }
-      return match;
+  // Split lines while preserving CRLF format
+  const lines = sdp.split(/\r\n|\r|\n/);
+
+  // Find Opus payload type from rtpmap
+  let opusPayloadType = null;
+  for (const line of lines) {
+    const match = line.match(/^a=rtpmap:(\d+)\s+opus\/48000\/2/i);
+    if (match) {
+      opusPayloadType = match[1];
+      break;
     }
-  );
+  }
+
+  const modifiedLines = lines.map((line) => {
+    let targetPayload = opusPayloadType;
+    if (!targetPayload) {
+      const fmtpMatch = line.match(/^a=fmtp:(\d+)\s+(.*)$/);
+      if (fmtpMatch && (fmtpMatch[2].includes('minptime') || fmtpMatch[2].includes('useinbandfec') || fmtpMatch[2].includes('opus'))) {
+        targetPayload = fmtpMatch[1];
+      }
+    }
+
+    if (targetPayload && line.startsWith(`a=fmtp:${targetPayload} `)) {
+      const existingParamsStr = line.substring(`a=fmtp:${targetPayload} `.length).trim();
+      const paramMap = new Map();
+
+      existingParamsStr.split(';').forEach((part) => {
+        const [k, v] = part.trim().split('=');
+        if (k) paramMap.set(k.trim(), v !== undefined ? v.trim() : '');
+      });
+
+      // Apply low latency, high fidelity stereo Opus parameters idempotently
+      paramMap.set('minptime', '10');
+      paramMap.set('useinbandfec', '1');
+      paramMap.set('stereo', '1');
+      paramMap.set('sprop-stereo', '1');
+      paramMap.set('maxaveragebitrate', '128000');
+      paramMap.set('cbr', '1');
+
+      const newParams = Array.from(paramMap.entries())
+        .map(([k, v]) => (v !== '' ? `${k}=${v}` : k))
+        .join(';');
+
+      return `a=fmtp:${targetPayload} ${newParams}`;
+    }
+    return line;
+  });
+
+  return modifiedLines.join('\r\n');
 }
 
 /**

@@ -154,7 +154,9 @@ export default function SenderPage() {
 
       // If there was an existing connection for this ID, close it
       if (peerConnectionsRef.current.has(receiverSocketId)) {
-        cleanupPeerConnection(peerConnectionsRef.current.get(receiverSocketId).pc);
+        const old = peerConnectionsRef.current.get(receiverSocketId);
+        if (old.watchdogTimer) clearTimeout(old.watchdogTimer);
+        cleanupPeerConnection(old.pc);
         peerConnectionsRef.current.delete(receiverSocketId);
       }
 
@@ -169,6 +171,7 @@ export default function SenderPage() {
         joinedAt: Date.now(),
         pendingCandidates: [],
         hasRemoteDescription: false,
+        watchdogTimer: null,
       };
 
       peerConnectionsRef.current.set(receiverSocketId, receiverEntry);
@@ -199,11 +202,21 @@ export default function SenderPage() {
           pc.iceConnectionState === 'failed' ||
           pc.iceConnectionState === 'closed';
 
-        if (isConnected && receiverEntry.state !== 'connected') {
-          console.log(`[Sender] Phone ${receiverSocketId} is fully connected & streaming!`);
-          receiverEntry.state = 'connected';
-          updateConnectedPhonesList();
+        if (isConnected) {
+          if (receiverEntry.watchdogTimer) {
+            clearTimeout(receiverEntry.watchdogTimer);
+            receiverEntry.watchdogTimer = null;
+          }
+          if (receiverEntry.state !== 'connected') {
+            console.log(`[Sender] Phone ${receiverSocketId} is fully connected & streaming!`);
+            receiverEntry.state = 'connected';
+            updateConnectedPhonesList();
+          }
         } else if (isDisconnected) {
+          if (receiverEntry.watchdogTimer) {
+            clearTimeout(receiverEntry.watchdogTimer);
+            receiverEntry.watchdogTimer = null;
+          }
           console.log(`[Sender] Phone ${receiverSocketId} connection dropped.`);
           receiverEntry.state = 'disconnected';
           cleanupPeerConnection(pc);
@@ -214,6 +227,32 @@ export default function SenderPage() {
 
       pc.onconnectionstatechange = checkAndUpdateState;
       pc.oniceconnectionstatechange = checkAndUpdateState;
+
+      // Watchdog: Rescue stalled connections with ICE restart after 6s
+      receiverEntry.watchdogTimer = setTimeout(async () => {
+        const currentEntry = peerConnectionsRef.current.get(receiverSocketId);
+        if (currentEntry && currentEntry.state !== 'connected' && currentEntry.pc) {
+          const isAlive =
+            currentEntry.pc.connectionState === 'connected' ||
+            currentEntry.pc.iceConnectionState === 'connected' ||
+            currentEntry.pc.iceConnectionState === 'completed';
+
+          if (!isAlive && currentEntry.pc.signalingState !== 'closed') {
+            console.log(`[Sender] Connection to phone ${receiverSocketId} stalled. Triggering automatic ICE restart...`);
+            try {
+              const restartOffer = await currentEntry.pc.createOffer({ iceRestart: true });
+              restartOffer.sdp = optimizeAudioSdp(restartOffer.sdp);
+              await currentEntry.pc.setLocalDescription(restartOffer);
+              socket.emit('offer', {
+                to: receiverSocketId,
+                offer: currentEntry.pc.localDescription,
+              });
+            } catch (rErr) {
+              console.warn('[Sender] ICE restart attempt error:', rErr);
+            }
+          }
+        }
+      }, 6000);
 
       // Create and send WebRTC offer to this phone
       try {
@@ -303,7 +342,12 @@ export default function SenderPage() {
         setRoomId(newRoomId);
         setState(STATES.ACTIVE);
 
-        // 5. Setup Multi-Phone Signaling Event Handlers
+        // 5. Setup Multi-Phone Signaling Event Handlers (clean old listeners first)
+        socket.off('receiver-joined');
+        socket.off('answer');
+        socket.off('ice-candidate');
+        socket.off('receiver-left');
+        socket.off('peer-disconnected');
 
         // Receiver joined -> establish WebRTC peer connection
         socket.on('receiver-joined', async ({ receiverSocketId, totalReceivers }) => {
@@ -339,20 +383,21 @@ export default function SenderPage() {
           }
         });
 
-        // ICE candidate from receiver (with queuing if remote description isn't set yet)
+        // ICE candidate from receiver (with safe parsing and queuing)
         socket.on('ice-candidate', async ({ from, candidate }) => {
+          if (!candidate) return;
           const entry = peerConnectionsRef.current.get(from);
           if (entry && entry.pc) {
-            const iceCand = new RTCIceCandidate(candidate);
-            if (entry.hasRemoteDescription) {
-              try {
+            try {
+              const iceCand = candidate.candidate !== undefined ? candidate : new RTCIceCandidate(candidate);
+              if (entry.hasRemoteDescription && entry.pc.remoteDescription) {
                 await entry.pc.addIceCandidate(iceCand);
-              } catch (err) {
-                console.error(`[Sender] Error adding ICE candidate from phone ${from}:`, err);
+              } else {
+                console.log(`[Sender] Buffering ICE candidate for phone ${from}`);
+                entry.pendingCandidates.push(iceCand);
               }
-            } else {
-              console.log(`[Sender] Buffering ICE candidate for phone ${from}`);
-              entry.pendingCandidates.push(iceCand);
+            } catch (err) {
+              console.warn(`[Sender] Error adding ICE candidate from phone ${from}:`, err);
             }
           }
         });
@@ -369,6 +414,7 @@ export default function SenderPage() {
 
             if (!isP2pAlive) {
               console.log(`[Sender] Closing inactive peer connection for ${receiverSocketId}`);
+              if (entry.watchdogTimer) clearTimeout(entry.watchdogTimer);
               cleanupPeerConnection(entry.pc);
               peerConnectionsRef.current.delete(receiverSocketId);
               updateConnectedPhonesList();
@@ -396,14 +442,28 @@ export default function SenderPage() {
         statsIntervalRef.current = setInterval(async () => {
           let totalLatency = 0;
           let measuredCount = 0;
+          let listUpdated = false;
 
           for (const [id, entry] of peerConnectionsRef.current.entries()) {
-            if (entry.pc && entry.pc.connectionState === 'connected') {
-              const stats = await getConnectionStats(entry.pc);
-              if (stats.latency !== null) {
-                entry.latency = stats.latency;
-                totalLatency += stats.latency;
-                measuredCount++;
+            if (entry.pc) {
+              const isConnected =
+                entry.pc.connectionState === 'connected' ||
+                entry.pc.iceConnectionState === 'connected' ||
+                entry.pc.iceConnectionState === 'completed';
+
+              if (isConnected && entry.state !== 'connected') {
+                entry.state = 'connected';
+                listUpdated = true;
+              }
+
+              if (isConnected) {
+                const stats = await getConnectionStats(entry.pc);
+                if (stats.latency !== null) {
+                  entry.latency = stats.latency;
+                  totalLatency += stats.latency;
+                  measuredCount++;
+                  listUpdated = true;
+                }
               }
             }
           }
@@ -413,7 +473,9 @@ export default function SenderPage() {
           } else {
             setAvgLatency(null);
           }
-          updateConnectedPhonesList();
+          if (listUpdated) {
+            updateConnectedPhonesList();
+          }
         }, 2500);
       } catch (err) {
         console.error('[Sender] Start error:', err);

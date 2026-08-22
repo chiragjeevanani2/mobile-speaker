@@ -72,8 +72,31 @@ app.get('/api/config', (_req, res) => {
   try {
     iceServers = JSON.parse(process.env.ICE_SERVERS || '[]');
   } catch (_err) {
-    iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+    iceServers = [];
   }
+
+  if (!Array.isArray(iceServers) || iceServers.length === 0) {
+    iceServers = [
+      {
+        urls: [
+          'stun:stun.l.google.com:19302',
+          'stun:stun1.l.google.com:19302',
+          'stun:stun2.l.google.com:19302',
+          'stun:stun3.l.google.com:19302',
+          'stun:stun4.l.google.com:19302',
+        ],
+      },
+      {
+        urls: [
+          'stun:stun.cloudflare.com:3478',
+          'stun:global.stun.twilio.com:3478',
+          'stun:stun.freeswitch.org:3478',
+          'stun:stun.voiparound.com:3478',
+        ],
+      },
+    ];
+  }
+
   res.json({ iceServers });
 });
 
