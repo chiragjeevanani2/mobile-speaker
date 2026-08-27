@@ -93,5 +93,15 @@ class AudioPlaybackCaptureModule(private val reactContext: ReactApplicationConte
         }
     }
 
+    @ReactMethod
+    fun addListener(eventName: String) {
+        // Required for RN built-in Event Emitter
+    }
+
+    @ReactMethod
+    fun removeListeners(count: Int) {
+        // Required for RN built-in Event Emitter
+    }
+
     override fun onNewIntent(intent: Intent?) {}
 }
