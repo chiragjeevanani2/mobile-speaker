@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { StatusBar } from 'expo-status-bar';
+import { StyleSheet, View, StatusBar } from 'react-native';
 import { COLORS } from './src/config/constants';
 import HomeScreen from './src/screens/HomeScreen';
 import ReceiverScreen from './src/screens/ReceiverScreen';
@@ -36,7 +35,7 @@ export default function App() {
 
   return (
     <View style={styles.container}>
-      <StatusBar style="light" backgroundColor={COLORS.bgPrimary} />
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.bgPrimary} />
       {renderScreen()}
     </View>
   );

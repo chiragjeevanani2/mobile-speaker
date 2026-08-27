@@ -32,6 +32,11 @@ jobs:
           cd mobile
           npm install
 
+      - name: Copy Vector Icon Fonts
+        run: |
+          mkdir -p mobile/android/app/src/main/assets/fonts
+          cp -f mobile/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/*.ttf mobile/android/app/src/main/assets/fonts/ || true
+
       - name: Generate Debug Keystore for APK Signing
         run: |
           mkdir -p mobile/android/app

@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   Share,
-  Clipboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -19,13 +18,14 @@ export default function MicSenderScreen({ onNavigate }) {
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleCopyLink = () => {
+  const handleCopyLink = async () => {
     if (!roomId) return;
     const url = `https://mobile-speaker-cj.vercel.app/speaker/${roomId}`;
-    Clipboard.setString(url);
-    setCopied(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await Share.share({ message: url });
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
   };
 
   const handleShare = async () => {

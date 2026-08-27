@@ -23,3 +23,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.sw?
+
+# Android assets generated during build
+mobile/android/app/src/main/assets/fonts/
+
