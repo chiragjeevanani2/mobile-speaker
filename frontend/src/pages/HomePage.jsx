@@ -21,6 +21,10 @@ export default function HomePage() {
   const [inputError, setInputError] = useState('');
   const [isScannerOpen, setIsScannerOpen] = useState(false);
 
+  const isMobile =
+    typeof navigator !== 'undefined' &&
+    /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '');
+
   const handleJoinByCode = (e) => {
     e?.preventDefault();
     const cleanCode = roomCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -80,10 +84,10 @@ export default function HomePage() {
         {/* Action Grid: Host vs Join */}
         <div className="action-grid animate-fade-in" style={{ animationDelay: '0.2s' }}>
           {/* Card 1: Broadcast from PC */}
-          <div className="action-card host-card">
+          <div className={`action-card host-card ${!isMobile ? 'card-featured' : ''}`}>
             <div className="card-badge host-badge">
               <Radio size={14} />
-              <span>Host on PC</span>
+              <span>{isMobile ? 'Host (PC Recommended)' : 'Host on PC'}</span>
             </div>
             <div className="card-header-group">
               <div className="card-icon-circle host-icon">
@@ -91,7 +95,11 @@ export default function HomePage() {
               </div>
               <div>
                 <h3>Share Audio from PC</h3>
-                <p>Broadcast your tab, window, or mic audio to your phone</p>
+                <p>
+                  {isMobile
+                    ? 'Broadcast tab audio from PC/Mac (or phone microphone)'
+                    : 'Broadcast your tab, window, or mic audio to your phone'}
+                </p>
               </div>
             </div>
 
@@ -105,10 +113,13 @@ export default function HomePage() {
           </div>
 
           {/* Card 2: Listen on Phone (Speaker) */}
-          <div className="action-card receive-card">
-            <div className="card-badge receive-badge">
-              <Smartphone size={14} />
-              <span>Listen on Phone</span>
+          <div className={`action-card receive-card ${isMobile ? 'card-featured' : ''}`}>
+            <div className="badge-row">
+              <div className="card-badge receive-badge">
+                <Smartphone size={14} />
+                <span>Listen on Phone</span>
+              </div>
+              {isMobile && <span className="mobile-rec-badge">✨ Recommended on Phone</span>}
             </div>
             <div className="card-header-group">
               <div className="card-icon-circle receive-icon">
@@ -289,6 +300,19 @@ export default function HomePage() {
           box-shadow: var(--shadow-xl);
         }
 
+        .card-featured {
+          border-color: rgba(99, 102, 241, 0.4);
+          background: linear-gradient(180deg, var(--bg-card) 0%, rgba(99, 102, 241, 0.04) 100%);
+        }
+
+        .badge-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 16px;
+          flex-wrap: wrap;
+        }
+
         .card-badge {
           display: inline-flex;
           align-items: center;
@@ -300,13 +324,25 @@ export default function HomePage() {
           padding: 4px 10px;
           border-radius: 20px;
           width: fit-content;
-          margin-bottom: 16px;
+        }
+
+        .mobile-rec-badge {
+          display: inline-flex;
+          align-items: center;
+          font-size: 0.72rem;
+          font-weight: 700;
+          color: var(--success);
+          background: rgba(34, 197, 94, 0.12);
+          border: 1px solid rgba(34, 197, 94, 0.3);
+          padding: 3px 8px;
+          border-radius: 12px;
         }
 
         .host-badge {
           background: rgba(99, 102, 241, 0.15);
           color: var(--accent);
           border: 1px solid rgba(99, 102, 241, 0.3);
+          margin-bottom: 16px;
         }
 
         .receive-badge {

@@ -63,6 +63,8 @@ export default function ReceiverPage() {
   const statsIntervalRef = useRef(null);
   const pendingCandidatesRef = useRef([]);
   const hasRemoteDescriptionRef = useRef(false);
+  const pcmContextRef = useRef(null);
+  const nextPcmTimeRef = useRef(0);
 
   // Sync if URL param changes
   useEffect(() => {
@@ -120,10 +122,18 @@ export default function ReceiverPage() {
     pendingCandidatesRef.current = [];
     hasRemoteDescriptionRef.current = false;
 
+    if (pcmContextRef.current) {
+      try {
+        pcmContextRef.current.close();
+      } catch {}
+      pcmContextRef.current = null;
+    }
+
     if (socketRef.current) {
       socketRef.current.off('offer');
       socketRef.current.off('answer');
       socketRef.current.off('ice-candidate');
+      socketRef.current.off('audio-chunk');
       socketRef.current.off('peer-disconnected');
       disconnectSocket();
       socketRef.current = null;
@@ -334,6 +344,69 @@ export default function ReceiverPage() {
           }
         } catch (err) {
           console.warn('[Receiver] Error adding ICE candidate:', err);
+        }
+      });
+
+      // Handle raw PCM audio chunks from native Android system audio capture
+      socket.on('audio-chunk', ({ chunk }) => {
+        if (!chunk) return;
+        try {
+          if (!pcmContextRef.current || pcmContextRef.current.state === 'closed') {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            pcmContextRef.current = new AudioCtx({ sampleRate: 48000 });
+            nextPcmTimeRef.current = pcmContextRef.current.currentTime;
+          }
+
+          const ctx = pcmContextRef.current;
+          if (ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+          }
+
+          let rawBytes;
+          if (typeof chunk === 'string') {
+            const binary = atob(chunk);
+            rawBytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+              rawBytes[i] = binary.charCodeAt(i);
+            }
+          } else {
+            rawBytes = new Uint8Array(chunk);
+          }
+
+          const int16Array = new Int16Array(rawBytes.buffer, rawBytes.byteOffset, Math.floor(rawBytes.byteLength / 2));
+          const numFrames = Math.floor(int16Array.length / 2);
+          if (numFrames <= 0) return;
+
+          const audioBuffer = ctx.createBuffer(2, numFrames, 48000);
+          const leftChannel = audioBuffer.getChannelData(0);
+          const rightChannel = audioBuffer.getChannelData(1);
+
+          let sum = 0;
+          for (let i = 0; i < numFrames; i++) {
+            const l = int16Array[i * 2] / 32768;
+            const r = int16Array[i * 2 + 1] / 32768;
+            leftChannel[i] = l;
+            rightChannel[i] = r;
+            sum += Math.abs(l) + Math.abs(r);
+          }
+
+          setAudioLevel(Math.min(1, (sum / (numFrames * 2)) * 3));
+          setState(STATES.PLAYING);
+
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+
+          const gainNode = ctx.createGain();
+          gainNode.gain.value = muted ? 0 : volume;
+          source.connect(gainNode);
+          gainNode.connect(ctx.destination);
+
+          const currentTime = ctx.currentTime;
+          const startTime = Math.max(currentTime, nextPcmTimeRef.current);
+          source.start(startTime);
+          nextPcmTimeRef.current = startTime + audioBuffer.duration;
+        } catch (pcmErr) {
+          console.warn('[Receiver] PCM Chunk error:', pcmErr);
         }
       });
 

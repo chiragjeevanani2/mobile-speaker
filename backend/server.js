@@ -189,6 +189,13 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Relay native Android system audio PCM chunks directly to receivers
+  socket.on('audio-chunk', ({ roomId, chunk }) => {
+    if (roomId && chunk) {
+      socket.to(roomId).emit('audio-chunk', { chunk, from: socket.id });
+    }
+  });
+
   socket.on('peer-disconnect', () => {
     const roomId = socket.data.roomId;
     if (!roomId) return;

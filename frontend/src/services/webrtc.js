@@ -89,9 +89,26 @@ export function createContinuousAudioStream(rawStream) {
 }
 
 /**
+ * Check if display media capture (screen/tab audio) is supported in current environment.
+ */
+export function isDisplayMediaSupported() {
+  return (
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getDisplayMedia === 'function'
+  );
+}
+
+/**
  * Capture browser/tab audio using getDisplayMedia with continuous audio stream.
  */
 export async function captureDisplayAudio() {
+  if (!isDisplayMediaSupported()) {
+    throw new Error(
+      'Tab & system audio capture is not supported on mobile web browsers due to mobile OS security restrictions. To broadcast from this phone, use Microphone mode, or host from a PC/Laptop browser.'
+    );
+  }
+
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: true, // Required by browser spec to prompt tab/screen selection

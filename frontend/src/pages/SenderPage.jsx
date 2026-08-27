@@ -18,6 +18,11 @@ import {
   Users,
   QrCode,
   Radio,
+  Speaker,
+  Laptop,
+  ArrowRight,
+  Info,
+  Sparkles,
 } from 'lucide-react';
 import ThemeToggle from '../components/ThemeToggle.jsx';
 import AudioVisualizer from '../components/AudioVisualizer.jsx';
@@ -32,6 +37,7 @@ import {
   cleanupPeerConnection,
   cleanupStream,
   optimizeAudioSdp,
+  isDisplayMediaSupported,
 } from '../services/webrtc.js';
 
 const STATES = {
@@ -288,6 +294,11 @@ export default function SenderPage() {
     setConnectedPhones(list);
   };
 
+  const hasDisplayMedia = isDisplayMediaSupported();
+  const isMobileDevice =
+    typeof navigator !== 'undefined' &&
+    /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '');
+
   const startStreaming = useCallback(
     async (mode) => {
       setAudioMode(mode);
@@ -310,10 +321,17 @@ export default function SenderPage() {
         } catch (err) {
           if (err.message.includes('cancelled') || err.message.includes('denied') || err.name === 'NotAllowedError') {
             setState(STATES.PERMISSION_DENIED);
+          } else if (
+            err.message.includes('mobile') ||
+            err.message.includes('not supported') ||
+            err.message.includes('getDisplayMedia') ||
+            err.name === 'TypeError'
+          ) {
+            setState(STATES.UNSUPPORTED);
           } else {
             setState(STATES.FAILED);
           }
-          setErrorMsg(err.message);
+          setErrorMsg(err.message || 'Failed to capture audio');
           return;
         }
 
@@ -499,42 +517,101 @@ export default function SenderPage() {
               </div>
               <h2>Broadcast Audio</h2>
               <p className="mode-description">
-                Stream laptop sound to multiple phones simultaneously as wireless speakers.
+                {isMobileDevice
+                  ? 'Broadcast your phone microphone to other devices or switch to speaker mode.'
+                  : 'Stream laptop sound to multiple phones simultaneously as wireless speakers.'}
               </p>
 
-              <button
-                className="mode-btn mode-btn-primary"
-                onClick={() => startStreaming('display')}
-              >
-                <MonitorPlay size={24} />
-                <div>
-                  <span className="mode-btn-title">Share Tab / PC Audio</span>
-                  <span className="mode-btn-desc">
-                    Capture audio from YouTube, Spotify, video, or any browser tab.
-                  </span>
+              {/* Mobile Info Notice */}
+              {(!hasDisplayMedia || isMobileDevice) && (
+                <div className="mobile-sender-banner">
+                  <Smartphone size={20} className="banner-icon" />
+                  <div className="banner-text">
+                    <strong>Mobile Device Detected</strong>
+                    <p>
+                      Mobile browsers (Android & iOS) cannot capture audio from other apps or tabs. You can broadcast your <strong>Phone Microphone</strong> or join as a <strong>Speaker</strong> to listen to your PC.
+                    </p>
+                  </div>
                 </div>
-              </button>
+              )}
 
+              {/* Display / Tab Audio Button */}
+              {hasDisplayMedia ? (
+                <button
+                  className="mode-btn mode-btn-primary"
+                  onClick={() => startStreaming('display')}
+                >
+                  <MonitorPlay size={24} />
+                  <div>
+                    <span className="mode-btn-title">Share Tab / PC Audio</span>
+                    <span className="mode-btn-desc">
+                      Capture audio from YouTube, Spotify, video, or any browser tab.
+                    </span>
+                  </div>
+                </button>
+              ) : (
+                <div className="mode-btn mode-btn-disabled">
+                  <Laptop size={24} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '2px' }}>
+                      <span className="mode-btn-title">Share Tab / PC Audio</span>
+                      <span className="device-badge badge-desktop">PC / Laptop Only</span>
+                    </div>
+                    <span className="mode-btn-desc">
+                      Requires Chrome/Edge/Firefox on desktop to capture system or tab audio.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Microphone Button */}
               <button
-                className="mode-btn mode-btn-secondary"
+                className={`mode-btn ${!hasDisplayMedia ? 'mode-btn-primary' : 'mode-btn-secondary'}`}
                 onClick={() => startStreaming('mic')}
               >
                 <Mic size={24} />
-                <div>
-                  <span className="mode-btn-title">Microphone Test</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '2px' }}>
+                    <span className="mode-btn-title">
+                      {isMobileDevice ? 'Broadcast Phone Microphone' : 'Microphone Test'}
+                    </span>
+                    {isMobileDevice && (
+                      <span className="device-badge badge-mobile">
+                        <Sparkles size={11} style={{ marginRight: 3, display: 'inline' }} />
+                        Works on Mobile
+                      </span>
+                    )}
+                  </div>
                   <span className="mode-btn-desc">
-                    Test broadcasting your voice to connected phones.
+                    {isMobileDevice
+                      ? 'Stream your voice live to all connected speaker phones.'
+                      : 'Test broadcasting your voice to connected phones.'}
                   </span>
                 </div>
               </button>
 
-              <div className="browser-note">
-                <AlertTriangle size={16} />
-                <p>
-                  <strong>Tip:</strong> When prompted by Chrome/Edge, make sure the{' '}
-                  <strong>"Share audio"</strong> checkbox is checked.
-                </p>
+              {/* Switch to Speaker Mode shortcut */}
+              <div className="switch-speaker-section">
+                <p>Want to turn this phone into a speaker instead?</p>
+                <button
+                  className="switch-speaker-btn"
+                  onClick={() => navigate('/speaker')}
+                >
+                  <Speaker size={18} />
+                  <span>Join as Speaker (Listen to PC)</span>
+                  <ArrowRight size={16} />
+                </button>
               </div>
+
+              {hasDisplayMedia && (
+                <div className="browser-note">
+                  <AlertTriangle size={16} />
+                  <p>
+                    <strong>Tip:</strong> When prompted by Chrome/Edge, make sure the{' '}
+                    <strong>"Share audio"</strong> checkbox is checked.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         );
@@ -689,19 +766,70 @@ export default function SenderPage() {
         );
 
       case STATES.FAILED:
+      case STATES.UNSUPPORTED: {
+        const isMobileDisplayError =
+          errorMsg.includes('Tab & system audio') ||
+          errorMsg.includes('getDisplayMedia') ||
+          errorMsg.includes('mobile web browsers') ||
+          errorMsg.includes('mobile OS') ||
+          (!hasDisplayMedia && audioMode === 'display');
+
+        if (isMobileDisplayError) {
+          return (
+            <div className="sender-status animate-fade-in">
+              <div className="status-card error-card">
+                <AlertTriangle size={48} className="warning-icon" />
+                <h2>Tab Audio Unavailable on Mobile</h2>
+                <p className="error-msg">
+                  Mobile web browsers (Android & iOS) do not allow capturing audio from other apps or tabs due to operating system security restrictions.
+                </p>
+
+                <div className="resolution-options">
+                  <button className="resolution-btn-primary" onClick={() => startStreaming('mic')}>
+                    <Mic size={18} />
+                    <span>Broadcast Phone Mic Instead</span>
+                  </button>
+
+                  <button className="resolution-btn-secondary" onClick={() => navigate('/speaker')}>
+                    <Speaker size={18} />
+                    <span>Join as Speaker (Listen to PC)</span>
+                  </button>
+
+                  <button className="resolution-btn-subtle" onClick={handleBack}>
+                    <ArrowLeft size={16} />
+                    <span>Back to Home</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div className="sender-status animate-fade-in">
             <div className="status-card error-card">
               <XCircle size={48} className="error-icon" />
-              <h2>Connection Failed</h2>
+              <h2>{state === STATES.UNSUPPORTED ? 'Browser Not Supported' : 'Connection Failed'}</h2>
               <p className="error-msg">{errorMsg || 'Something went wrong.'}</p>
-              <button className="home-cta" onClick={handleBack}>
-                <ArrowLeft size={18} />
-                Start Over
-              </button>
+
+              <div className="resolution-options">
+                <button className="resolution-btn-primary" onClick={() => startStreaming('mic')}>
+                  <Mic size={18} />
+                  <span>Try Microphone Broadcast</span>
+                </button>
+                <button className="resolution-btn-secondary" onClick={() => navigate('/speaker')}>
+                  <Speaker size={18} />
+                  <span>Join as Wireless Speaker</span>
+                </button>
+                <button className="resolution-btn-subtle" onClick={handleBack}>
+                  <ArrowLeft size={16} />
+                  <span>Start Over</span>
+                </button>
+              </div>
             </div>
           </div>
         );
+      }
 
       case STATES.PERMISSION_DENIED:
         return (
@@ -711,26 +839,11 @@ export default function SenderPage() {
               <h2>Permission Denied</h2>
               <p className="error-msg">{errorMsg}</p>
               <p className="error-hint">
-                Please allow tab audio sharing and make sure "Share audio" is checked.
+                Please allow audio/microphone sharing permissions in your browser settings.
               </p>
               <button className="home-cta" onClick={handleBack}>
                 <ArrowLeft size={18} />
                 Start Over
-              </button>
-            </div>
-          </div>
-        );
-
-      case STATES.UNSUPPORTED:
-        return (
-          <div className="sender-status animate-fade-in">
-            <div className="status-card error-card">
-              <XCircle size={48} className="error-icon" />
-              <h2>Browser Not Supported</h2>
-              <p className="error-msg">{errorMsg}</p>
-              <button className="home-cta" onClick={handleBack}>
-                <ArrowLeft size={18} />
-                Go Back
               </button>
             </div>
           </div>
@@ -876,6 +989,184 @@ export default function SenderPage() {
           font-size: 0.82rem;
           color: var(--text-muted);
           line-height: 1.35;
+        }
+
+        .mode-btn-disabled {
+          opacity: 0.7;
+          cursor: not-allowed;
+          background: var(--bg-primary);
+          border-color: var(--border-color);
+        }
+
+        .mode-btn-disabled:hover {
+          transform: none;
+          box-shadow: none;
+        }
+
+        .mobile-sender-banner {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          padding: 14px 16px;
+          background: rgba(99, 102, 241, 0.08);
+          border: 1px solid rgba(99, 102, 241, 0.25);
+          border-radius: var(--radius-lg);
+          margin-bottom: 20px;
+          text-align: left;
+        }
+
+        .banner-icon {
+          color: var(--accent);
+          flex-shrink: 0;
+          margin-top: 2px;
+        }
+
+        .banner-text strong {
+          display: block;
+          font-size: 0.9rem;
+          color: var(--text-primary);
+          margin-bottom: 4px;
+        }
+
+        .banner-text p {
+          font-size: 0.82rem;
+          color: var(--text-secondary);
+          line-height: 1.4;
+          margin: 0;
+        }
+
+        .device-badge {
+          display: inline-flex;
+          align-items: center;
+          font-size: 0.72rem;
+          font-weight: 700;
+          padding: 2px 8px;
+          border-radius: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          white-space: nowrap;
+        }
+
+        .badge-desktop {
+          background: rgba(148, 163, 184, 0.15);
+          color: var(--text-muted);
+          border: 1px solid rgba(148, 163, 184, 0.3);
+        }
+
+        .badge-mobile {
+          background: rgba(99, 102, 241, 0.15);
+          color: var(--accent);
+          border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        .switch-speaker-section {
+          margin-top: 20px;
+          padding-top: 18px;
+          border-top: 1px dashed var(--border-color);
+          text-align: center;
+        }
+
+        .switch-speaker-section p {
+          font-size: 0.84rem;
+          color: var(--text-muted);
+          margin-bottom: 10px;
+        }
+
+        .switch-speaker-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          width: 100%;
+          padding: 12px 18px;
+          background: var(--bg-primary);
+          color: var(--text-primary);
+          border: 1px solid var(--border-color);
+          border-radius: var(--radius-lg);
+          font-weight: 600;
+          font-size: 0.9rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .switch-speaker-btn svg {
+          color: var(--success);
+        }
+
+        .switch-speaker-btn:hover {
+          background: var(--bg-card-hover);
+          border-color: var(--success);
+          color: var(--success);
+          transform: translateY(-1px);
+        }
+
+        .resolution-options {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          width: 100%;
+          margin-top: 24px;
+        }
+
+        .resolution-btn-primary {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 13px 18px;
+          background: linear-gradient(135deg, #6366f1, #8b5cf6);
+          color: white;
+          border: none;
+          border-radius: var(--radius-md);
+          font-weight: 600;
+          font-size: 0.95rem;
+          cursor: pointer;
+          transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .resolution-btn-primary:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+        }
+
+        .resolution-btn-secondary {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 12px 18px;
+          background: var(--bg-primary);
+          color: var(--text-primary);
+          border: 1px solid var(--border-color);
+          border-radius: var(--radius-md);
+          font-weight: 600;
+          font-size: 0.9rem;
+          cursor: pointer;
+          transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .resolution-btn-secondary:hover {
+          background: var(--bg-card-hover);
+          border-color: var(--accent);
+        }
+
+        .resolution-btn-subtle {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          background: transparent;
+          border: none;
+          color: var(--text-muted);
+          font-size: 0.85rem;
+          cursor: pointer;
+          padding: 6px;
+          margin-top: 4px;
+          transition: color 0.2s;
+        }
+
+        .resolution-btn-subtle:hover {
+          color: var(--text-primary);
         }
 
         .browser-note {

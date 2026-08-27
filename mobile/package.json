@@ -1,0 +1,27 @@
+{
+  "name": "hear-this-mobile",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "build:android": "cd android && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "expo": "~52.0.0",
+    "expo-status-bar": "~2.0.0",
+    "react": "18.3.1",
+    "react-native": "0.76.7",
+    "react-native-webview": "13.12.5",
+    "expo-camera": "~16.0.0",
+    "expo-keep-awake": "~14.0.0",
+    "expo-haptics": "~14.0.0",
+    "socket.io-client": "^4.8.3",
+    "@expo/vector-icons": "^14.0.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2"
+  },
+  "private": true
+}
