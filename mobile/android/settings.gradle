@@ -5,6 +5,6 @@ plugins {
     id("com.facebook.react.settings")
 }
 
-rootProject.name = 'Hear This'
+rootProject.name = 'HearThis'
 include ':app'
 includeBuild(new File(["node", "--print", "require.resolve('@react-native/gradle-plugin/package.json')"].execute(null, rootDir).text.trim()).getParentFile().toString())
