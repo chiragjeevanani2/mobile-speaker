@@ -32,12 +32,18 @@ jobs:
           cd mobile
           npm install
 
-      - name: Generate Keystore for Signing
+      - name: Generate Debug Keystore for APK Signing
         run: |
-          cd mobile/android/app
-          if [ ! -f debug.keystore ]; then
-            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          fi
+          mkdir -p mobile/android/app
+          keytool -genkey -v \
+            -keystore mobile/android/app/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
 
       - name: Build Android Release APK
         run: |
