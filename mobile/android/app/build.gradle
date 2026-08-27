@@ -11,10 +11,10 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.hearthis"
+    namespace "com.hearthis.app"
     defaultConfig {
-        applicationId "com.hearthis"
-        minSdkVersion 29 // Android 10+ required for AudioPlaybackCapture
+        applicationId "com.hearthis.app"
+        minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
